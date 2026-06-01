@@ -174,7 +174,7 @@ header    { visibility: hidden; }
 
 # ── GOOGLE SHEETS DATA ────────────────────────────────────────────────────────
 _SHEET_ID  = "1MNP2rXuL21JHFUof8GduNucAxCDcBazH"
-_GID       = "1811656867"
+_GID       = "379184043"
 GSHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{_SHEET_ID}"
     f"/export?format=csv&gid={_GID}"
