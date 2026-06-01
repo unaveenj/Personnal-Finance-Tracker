@@ -193,6 +193,7 @@ def load_data():
         )
         st.stop()
     df.columns           = df.columns.str.strip()
+    st.write("DEBUG columns:", df.columns.tolist())
     df["Date"]           = pd.to_datetime(df["Date"], errors="coerce")
     df["Amount"]         = pd.to_numeric(
         df["Amount"].astype(str).str.replace("S$", "", regex=False).str.replace(",", ""),
