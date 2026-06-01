@@ -371,7 +371,6 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
 
     # ── 3. Redundant subscriptions ──
     sub_cuts_list = [
-        ("AVG Antivirus", 82.62, "Windows Defender is ranked #1 — you're paying for nothing"),
         ("ChatGPT",       28.59, "You already have Claude — cancel the duplicate"),
         ("Spotify",       17.46, "YouTube Premium already includes YouTube Music"),
     ]
@@ -379,10 +378,10 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
     detail    = "; ".join(f"{n} (S${a:.0f})" for n, a, _ in sub_cuts_list)
     recs.append(dict(
         priority="high",
-        title="Cancel 3 redundant subscriptions — zero lifestyle change",
+        title="Cancel 2 redundant subscriptions — zero lifestyle change",
         body=(
             f"{detail}. "
-            f"These three overlap with tools you already have (Claude, YouTube Premium, Windows Defender). "
+            f"These overlap with tools you already have (Claude, YouTube Premium). "
             f"Cancelling takes 10 minutes."
         ),
         action=f"Cancel today → save S${sub_total:.0f}/month",
@@ -693,7 +692,7 @@ if page == "📊  Dashboard":
         (f1, "Current Trajectory",  avg_exp,            "#004D40",
          "Maintaining current habits"),
         (f2, "Cut Redundant Subs",  avg_exp - sub_cuts, "#00897B",
-         f"Cancel AVG, ChatGPT, Spotify — S${sub_cuts:.0f}/month saved"),
+         f"Cancel ChatGPT, Spotify — S${sub_cuts:.0f}/month saved"),
         (f3, "Fully Optimised",     avg_exp - opt_cut,  "#1B5E20",
          f"Subs + 15% less Food & Shopping — S${opt_cut:.0f}/month saved"),
     ]
@@ -1043,7 +1042,7 @@ elif page == "💡  Insights":
     st.markdown('<div class="section-title">Subscription Audit</div>', unsafe_allow_html=True)
     subscriptions = [
         ("Anytime Fitness",  89.00, "keep", "Great habit. Verify 3×/week+ attendance."),
-        ("AVG Antivirus",    82.62, "cut",  "Windows Defender is #1 by AV-TEST. Cancel → saves S$83/mo."),
+        ("AVG Antivirus",    82.62, "keep", "One-time annual payment — not a recurring subscription."),
         ("Newspaper",        33.90, "rev",  "Only worth it if read daily. Free: CNA, ST (limited)."),
         ("Claude",           30.00, "keep", "You're using it — keep."),
         ("ChatGPT",          28.59, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo."),
