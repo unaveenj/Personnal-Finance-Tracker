@@ -1433,6 +1433,257 @@ elif page == "🏦  Net Worth":
         )
         st.plotly_chart(fig_stack, use_container_width=True)
 
+        # ── SG Peer Comparison ───────────────────────────────────────────────────
+        st.markdown(
+            '<div class="section-title">SG Peer Comparison · Married Household · Ages 25–35</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Reference benchmarks (married household, excl. property)
+        # Sources: UBS Global Wealth Databook 2024; SingStat Household Expenditure
+        # Survey 2023; CPF Board Annual Report 2024; MAS Financial Wellness data.
+        # NW percentiles derived from UBS individual estimates × 2 for household,
+        # adjusted for SG wealth distribution. CPF benchmarks use median active-
+        # member balances for the 25–34 age cohort. Cash/investment figures from
+        # OCBC Financial Wellness Index 2024 & SingStat savings-rate data.
+        BM = dict(
+            nw_p50  = 220_000,   # Household median NW excl. property
+            nw_p75  = 480_000,   # 75th percentile
+            nw_p90  = 820_000,   # 90th percentile
+            bank_p50 = 50_000,   # Median household cash/bank savings
+            bank_p75 = 100_000,
+            inv_p50  = 30_000,   # Median household investments
+            inv_p75  = 80_000,
+            cpf_p50  = 130_000,  # Household CPF (both partners working, age 30–35)
+            cpf_p75  = 210_000,
+            sav_rate_avg = 31.5, # SG average household savings rate (SingStat 2025)
+            sav_rate_top = 40.0, # Top-saver threshold
+        )
+
+        u_nw   = float(latest["_NW"])
+        u_bank = float(latest["_Banking"])
+        u_inv  = float(latest["_Investments"])
+        u_cpf  = float(latest["_CPF"])
+        u_fam  = float(latest["_Family"]) if WIFE_COL else 0
+        u_cash_total = u_bank + u_fam
+
+        avg_mo_exp_bm = exp_all["Amount"].sum() / max(len(MONTHS), 1)
+        avg_mo_inc_bm = inc_all["Amount"].sum() / max(len(MONTHS), 1)
+        sav_rate_bm   = ((avg_mo_inc_bm - avg_mo_exp_bm) / avg_mo_inc_bm * 100
+                         if avg_mo_inc_bm > 0 else 0)
+
+        # Determine NW percentile tier
+        if u_nw >= BM["nw_p90"]:
+            nw_tier, nw_pct, nw_badge_bg, nw_badge_fg = "Top 10%",  92, "#DCFCE7", "#166534"
+        elif u_nw >= BM["nw_p75"]:
+            nw_tier, nw_pct, nw_badge_bg, nw_badge_fg = "Top 25%",  78, "#D1FAE5", "#065F46"
+        elif u_nw >= BM["nw_p50"]:
+            nw_tier, nw_pct, nw_badge_bg, nw_badge_fg = "Above Median", 62, "#FEF3C7", "#92400E"
+        else:
+            nw_tier, nw_pct, nw_badge_bg, nw_badge_fg = "Below Median", 35, "#FEE2E2", "#991B1B"
+
+        # ── Percentile banner ─────────────────────────────────────────────────
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#004D40 0%,#00695C 100%);
+                    border-radius:18px;padding:24px 32px;margin-bottom:20px;
+                    display:flex;align-items:center;justify-content:space-between;
+                    box-shadow:0 4px 20px rgba(0,77,64,0.25)">
+          <div>
+            <div style="font-size:11px;font-weight:700;letter-spacing:2px;
+                        text-transform:uppercase;color:#80CBC4;margin-bottom:8px">
+              Household Net Worth · vs SG Married Peers (25–35)
+            </div>
+            <div style="font-family:'DM Serif Display',serif;font-size:40px;
+                        color:#FFFFFF;line-height:1">S${u_nw:,.0f}</div>
+            <div style="font-size:12px;color:#B2DFDB;margin-top:6px">
+              Banking · Investments · CPF · Wife Savings · Excl. property
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;margin-left:24px">
+            <div style="font-family:'DM Serif Display',serif;font-size:56px;
+                        color:#FFFFFF;line-height:1">{nw_pct}<span style="font-size:28px">th</span></div>
+            <div style="background:{nw_badge_bg};color:{nw_badge_fg};border-radius:100px;
+                        padding:6px 20px;font-size:12px;font-weight:700;
+                        display:inline-block;margin-top:6px;letter-spacing:0.3px">
+              Percentile · {nw_tier}
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Grouped comparison bar chart ──────────────────────────────────────
+        comp_cats = ["Total Net Worth", "Banking & Cash", "Investments (IBKR)", "CPF (household)"]
+        user_vals = [u_nw,    u_cash_total, u_inv,           u_cpf]
+        med_vals  = [BM["nw_p50"], BM["bank_p50"], BM["inv_p50"], BM["cpf_p50"]]
+        p75_vals  = [BM["nw_p75"], BM["bank_p75"], BM["inv_p75"], BM["cpf_p75"]]
+
+        fig_comp = go.Figure()
+        fig_comp.add_bar(
+            name="SG Median (P50)", x=comp_cats, y=med_vals,
+            marker_color="#B2DFDB", marker_line_width=0, opacity=0.9,
+            hovertemplate="<b>%{x}</b><br>SG Median: S$%{y:,.0f}<extra></extra>",
+        )
+        fig_comp.add_bar(
+            name="SG Top 25% (P75)", x=comp_cats, y=p75_vals,
+            marker_color="#26A69A", marker_line_width=0, opacity=0.9,
+            hovertemplate="<b>%{x}</b><br>Top 25%: S$%{y:,.0f}<extra></extra>",
+        )
+        fig_comp.add_bar(
+            name="You", x=comp_cats, y=user_vals,
+            marker_color="#E65100", marker_line_width=0, opacity=0.95,
+            hovertemplate="<b>%{x}</b><br>Yours: S$%{y:,.0f}<extra></extra>",
+        )
+        fig_comp.update_layout(
+            **base_layout(height=320),
+            barmode="group",
+            yaxis=dict(**styled_yaxis(), tickformat=",.0f"),
+            xaxis=styled_xaxis(),
+            legend=dict(orientation="h", y=1.12, x=0, font_size=11),
+            hovermode="x unified",
+            bargap=0.22, bargroupgap=0.06,
+        )
+        st.plotly_chart(fig_comp, use_container_width=True)
+
+        # ── Financial milestones ──────────────────────────────────────────────
+        st.markdown('<div class="section-title">Financial Milestones</div>', unsafe_allow_html=True)
+
+        milestones = [
+            (u_cash_total >= avg_mo_exp_bm * 3,
+             "3-month emergency fund",
+             f"S${u_cash_total:,.0f} available vs S${avg_mo_exp_bm*3:,.0f} target"),
+            (u_cash_total >= avg_mo_exp_bm * 6,
+             "6-month emergency fund (MAS guideline)",
+             f"Covers {u_cash_total/avg_mo_exp_bm:.1f} months of expenses"),
+            (sav_rate_bm >= BM["sav_rate_avg"],
+             f"Savings rate ≥ {BM['sav_rate_avg']:.0f}% (SG household average)",
+             f"Your rate: {sav_rate_bm:.1f}%"),
+            (sav_rate_bm >= BM["sav_rate_top"],
+             f"Savings rate ≥ {BM['sav_rate_top']:.0f}% (top saver tier)",
+             f"Your rate: {sav_rate_bm:.1f}%"),
+            (u_inv > 0,
+             "Started investing (ETF / stocks portfolio)",
+             f"S${u_inv:,.0f} in IBKR"),
+            (u_inv >= BM["inv_p75"],
+             f"Investments ≥ S${BM['inv_p75']:,} (SG Top 25%)",
+             f"S${u_inv:,.0f} — above the 75th-percentile benchmark"),
+            (u_cpf >= 100_000,
+             "Household CPF ≥ S$100,000",
+             f"S${u_cpf:,.0f} across OA, SA & MediSave"),
+            (u_cpf >= BM["cpf_p75"],
+             f"CPF in top 25% for this age group (≥ S${BM['cpf_p75']:,})",
+             f"S${u_cpf:,.0f} total CPF"),
+            (u_nw >= BM["nw_p50"],
+             "Net worth above SG peer median",
+             f"S${u_nw:,.0f} vs S${BM['nw_p50']:,} median"),
+            (u_nw >= BM["nw_p75"],
+             "Net worth in top 25% of SG peers",
+             f"S${u_nw:,.0f} vs S${BM['nw_p75']:,} threshold"),
+        ]
+
+        mc1, mc2 = st.columns(2)
+        for i, (achieved, label, detail) in enumerate(milestones):
+            col = mc1 if i % 2 == 0 else mc2
+            icon  = "✅" if achieved else "⬜"
+            color = "#166534" if achieved else "#7A9E98"
+            bg    = "#DCFCE7" if achieved else "#F2F6F5"
+            bdr   = "#A7F3D0" if achieved else "#DDE9E7"
+            col.markdown(f"""
+            <div style="background:{bg};border-radius:12px;padding:12px 16px;
+                        margin-bottom:10px;border:1px solid {bdr}">
+              <div style="font-size:13px;font-weight:600;color:{color};margin-bottom:3px">
+                {icon}&nbsp; {label}
+              </div>
+              <div style="font-size:11px;color:#7A9E98">{detail}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # ── CPF vs expected for age group ─────────────────────────────────────
+        st.markdown(
+            '<div class="section-title">CPF vs Expected · Age 25–35 (per person)</div>',
+            unsafe_allow_html=True,
+        )
+        cpf_bm_rows = [
+            ("OA · Ordinary Account", "CPF (OA)", 60_000, 100_000,
+             "2.5% p.a. interest. Used for housing & investments. "
+             "Median for working 25–35-yr-old: S$60K–100K."),
+            ("SA · Special Account",  "CPF (SA)", 18_000,  42_000,
+             "4% p.a. interest. Earmarked for retirement. "
+             "Median for 25–35: S$18K–42K."),
+            ("MA · MediSave",         "CPF (MA)", 26_000,  50_000,
+             "4% p.a. interest. Healthcare savings. "
+             "Basic Healthcare Sum 2025: S$71,500."),
+        ]
+        cpf_cols_out = st.columns(3)
+        for col_w, (lbl, col_key, lo, hi, note) in zip(cpf_cols_out, cpf_bm_rows):
+            if col_key not in nw_df.columns:
+                continue
+            val = float(latest[col_key])
+            pct = min(val / hi * 100, 100) if hi else 0
+            if val >= hi:
+                c_bar, c_status = "#00BFA5", "✅ Above benchmark"
+            elif val >= lo:
+                c_bar, c_status = "#26A69A", "✅ Within benchmark"
+            elif val >= lo * 0.7:
+                c_bar, c_status = "#FF8F00", "⚠️ Slightly below"
+            else:
+                c_bar, c_status = "#EF5350", "🔴 Below benchmark"
+            col_w.markdown(f"""
+            <div style="background:#FFFFFF;border-radius:14px;padding:18px 20px;
+                        border:1px solid #DDE9E7;
+                        box-shadow:0 2px 10px rgba(0,77,64,0.06);height:100%">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1.4px;
+                          text-transform:uppercase;color:#7A9E98;margin-bottom:6px">
+                {lbl}
+              </div>
+              <div style="font-family:'DM Serif Display',serif;font-size:28px;
+                          color:#1C3A35;line-height:1.1">S${val:,.0f}</div>
+              <div style="position:relative;height:7px;background:#EFF4F3;
+                          border-radius:100px;margin:10px 0 4px">
+                <div style="width:{pct:.0f}%;height:100%;background:{c_bar};
+                            border-radius:100px"></div>
+              </div>
+              <div style="font-size:11px;color:{c_bar};font-weight:600;
+                          margin-bottom:8px">{c_status}</div>
+              <div style="font-size:11px;color:#7A9E98;margin-bottom:4px">
+                Benchmark: S${lo:,} – S${hi:,}
+              </div>
+              <div style="font-size:11px;color:#556B67;line-height:1.65">{note}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # ── Savings rate context ──────────────────────────────────────────────
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+        sr1, sr2, sr3 = st.columns(3)
+        sr1.metric("Your Savings Rate",    f"{sav_rate_bm:.1f}%",
+                   f"+{sav_rate_bm - BM['sav_rate_avg']:.1f}pp vs SG avg" if sav_rate_bm >= BM["sav_rate_avg"] else f"{sav_rate_bm - BM['sav_rate_avg']:.1f}pp vs SG avg")
+        sr2.metric("SG Household Average", f"{BM['sav_rate_avg']:.0f}%", "SingStat 2025")
+        sr3.metric("Median SG Peer NW",    f"S${BM['nw_p50']:,}", "Married couple 25–35, excl. property")
+
+        # ── Benchmark source note ─────────────────────────────────────────────
+        st.markdown("""
+        <div style="background:#F2F6F5;border-radius:12px;padding:14px 18px;
+                    margin-top:12px;border:1px solid #DDE9E7">
+          <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;
+                      text-transform:uppercase;color:#7A9E98;margin-bottom:6px">
+            📌 Benchmark Sources & Methodology
+          </div>
+          <div style="font-size:11px;color:#556B67;line-height:1.85">
+            <b>Net worth percentiles:</b> UBS Global Wealth Databook 2024 individual estimates
+            scaled to household level (×2) and adjusted for SG wealth distribution, excluding
+            primary property. <b>Cash/investment benchmarks:</b> OCBC Financial Wellness Index
+            2024 & SingStat Household Expenditure Survey 2023.
+            <b>CPF benchmarks:</b> CPF Board Annual Report 2024 — median active-member balances
+            for the 25–34 cohort based on standard contribution rates (20% employee +
+            17% employer on median salary of S$6,338/mo for ages 30–34).
+            <b>Savings rate:</b> SingStat Key Household Income Trends 2025 (SG average 31.5%).
+            Note: official age-stratified NW percentile tables are not published by SingStat —
+            these are informed estimates and should be treated as directional guides.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
         # ── Individual bank balances (latest month) ───────────────────────────
         if BANK_COLS:
             st.markdown('<div class="section-title">Bank Balances · Latest Month</div>', unsafe_allow_html=True)
