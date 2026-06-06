@@ -175,9 +175,14 @@ header    { visibility: hidden; }
 # ── GOOGLE SHEETS DATA ────────────────────────────────────────────────────────
 _SHEET_ID  = "1MNP2rXuL21JHFUof8GduNucAxCDcBazH"
 _GID       = "379184043"
+_NW_GID    = "699682413"
 GSHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{_SHEET_ID}"
     f"/export?format=csv&gid={_GID}"
+)
+NW_GSHEET_URL = (
+    f"https://docs.google.com/spreadsheets/d/{_SHEET_ID}"
+    f"/export?format=csv&gid={_NW_GID}"
 )
 
 @st.cache_data(ttl=300)
@@ -206,6 +211,31 @@ def load_data():
     df["Notes"]          = df.get("Notes", pd.Series(dtype=str)).fillna("")
     df["Description"]    = df.get("Description", pd.Series(dtype=str)).fillna("")
     return df
+
+@st.cache_data(ttl=300)
+def load_networth():
+    try:
+        df = pd.read_csv(NW_GSHEET_URL)
+    except Exception as e:
+        st.error(
+            "**Cannot load Net Worth sheet.**\n\n"
+            f"`{e}`"
+        )
+        return pd.DataFrame()
+    df.columns = df.columns.str.strip()
+    numeric_cols = ["DBS","Maribank","UOB","OCBC","Citi","Chocolate",
+                    "IBKR","CPF (OA)","CPF (SA)","CPF (MA)","Liquid Cash","Total networth"]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace("S$", "", regex=False).str.replace(",", ""),
+                errors="coerce"
+            ).fillna(0)
+    df["Month"] = df["Month"].astype(str).str.strip()
+    df["_sort"] = pd.to_datetime(df["Month"], format="%b %Y", errors="coerce")
+    df = df.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
+    return df
+
 
 df_all  = load_data()
 exp_all = df_all[df_all["Type"] == "Expense"]
@@ -1164,103 +1194,216 @@ elif page == "💳  Transactions":
 elif page == "🏦  Net Worth":
     st.markdown('<div class="page-title">Net Worth Tracker</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-subtitle">Enter your end-of-month balances — chart updates live</div>',
+        '<div class="page-subtitle">Live from your Google Sheet · refreshes every 5 min</div>',
         unsafe_allow_html=True
     )
-    st.info("Your data lives in this session. Export as CSV to save it between visits.", icon="ℹ️")
 
-    months_nw = ["May 2026","Jun 2026","Jul 2026","Aug 2026",
-                 "Sep 2026","Oct 2026","Nov 2026","Dec 2026"]
+    nw_df = load_networth()
 
-    if "nw_data" not in st.session_state:
-        st.session_state.nw_data = {
-            m: {"DBS/POSB":0.0,"Citi Bank":0.0,"Other Bank":0.0,"Cash":0.0,
-                "CPF OA":0.0,"CPF SA":0.0,"CPF MA":0.0,"Stocks/ETFs":0.0}
-            for m in months_nw
-        }
+    if nw_df.empty:
+        st.warning("No net worth data found. Check that the Networth sheet is shared and the GID is correct.")
+        st.stop()
 
-    active_month = st.selectbox("Month to enter / edit", months_nw)
-    d = st.session_state.nw_data[active_month]
+    BANK_COLS = [c for c in ["DBS","Maribank","UOB","OCBC","Citi","Chocolate"] if c in nw_df.columns]
+    INV_COLS  = [c for c in ["IBKR"] if c in nw_df.columns]
+    CPF_COLS  = [c for c in ["CPF (OA)","CPF (SA)","CPF (MA)"] if c in nw_df.columns]
+    CASH_COL  = "Liquid Cash" if "Liquid Cash" in nw_df.columns else None
+    NW_COL    = "Total networth" if "Total networth" in nw_df.columns else None
 
-    st.markdown('<div class="section-title">Cash & Bank Accounts</div>', unsafe_allow_html=True)
-    bc1, bc2, bc3, bc4 = st.columns(4)
-    d["DBS/POSB"]   = bc1.number_input("DBS / POSB",   value=d["DBS/POSB"],   step=100.0, format="%.2f", key=f"dbs_{active_month}")
-    d["Citi Bank"]  = bc2.number_input("Citi Bank",    value=d["Citi Bank"],  step=100.0, format="%.2f", key=f"citi_{active_month}")
-    d["Other Bank"] = bc3.number_input("Other Bank",   value=d["Other Bank"], step=100.0, format="%.2f", key=f"other_{active_month}")
-    d["Cash"]       = bc4.number_input("Cash on Hand", value=d["Cash"],       step=10.0,  format="%.2f", key=f"cash_{active_month}")
+    nw_df["_Banking"]     = nw_df[BANK_COLS].sum(axis=1) if BANK_COLS else 0
+    nw_df["_Investments"] = nw_df[INV_COLS].sum(axis=1)  if INV_COLS  else 0
+    nw_df["_CPF"]         = nw_df[CPF_COLS].sum(axis=1)  if CPF_COLS  else 0
+    nw_df["_Cash"]        = nw_df[CASH_COL] if CASH_COL else 0
+    if NW_COL:
+        nw_df["_NW"] = nw_df[NW_COL]
+    else:
+        nw_df["_NW"] = nw_df["_Banking"] + nw_df["_Investments"] + nw_df["_CPF"] + nw_df["_Cash"]
 
-    st.markdown('<div class="section-title">CPF Accounts</div>', unsafe_allow_html=True)
-    cc1, cc2, cc3 = st.columns(3)
-    d["CPF OA"] = cc1.number_input("CPF Ordinary (OA)", value=d["CPF OA"], step=100.0, format="%.2f", key=f"oa_{active_month}")
-    d["CPF SA"] = cc2.number_input("CPF Special (SA)",  value=d["CPF SA"], step=100.0, format="%.2f", key=f"sa_{active_month}")
-    d["CPF MA"] = cc3.number_input("CPF MediSave (MA)", value=d["CPF MA"], step=100.0, format="%.2f", key=f"ma_{active_month}")
+    has_data = len(nw_df) > 0 and nw_df["_NW"].sum() > 0
 
-    st.markdown('<div class="section-title">Investments</div>', unsafe_allow_html=True)
-    d["Stocks/ETFs"] = st.number_input(
-        "Stocks / ETFs (market value)", value=d["Stocks/ETFs"],
-        step=100.0, format="%.2f", key=f"inv_{active_month}"
-    )
-    st.session_state.nw_data[active_month] = d
+    if not has_data:
+        st.info("The Networth sheet loaded but has no data yet. Add entries to see your tracker.")
+    else:
+        # ── KPI row: latest month ─────────────────────────────────────────────
+        latest = nw_df.iloc[-1]
+        prev   = nw_df.iloc[-2] if len(nw_df) >= 2 else None
 
-    rows = []
-    for m in months_nw:
-        v = st.session_state.nw_data[m]
-        cash_t = v["DBS/POSB"] + v["Citi Bank"] + v["Other Bank"] + v["Cash"]
-        cpf_t  = v["CPF OA"] + v["CPF SA"] + v["CPF MA"]
-        nw     = cash_t + cpf_t + v["Stocks/ETFs"]
-        rows.append({"Month":m,"Cash":cash_t,"CPF OA":v["CPF OA"],
-                     "Total CPF":cpf_t,"Investments":v["Stocks/ETFs"],"Net Worth":nw})
-    nw_df    = pd.DataFrame(rows)
-    has_data = nw_df["Net Worth"].sum() > 0
+        def nw_delta(key):
+            if prev is None:
+                return None
+            return latest[key] - prev[key]
 
-    if has_data:
-        st.markdown('<div class="section-title">Net Worth Over Time</div>', unsafe_allow_html=True)
-        fig = go.Figure()
-        fig.add_scatter(x=nw_df["Month"], y=nw_df["Cash"],
-                        name="Cash in Hand", mode="lines+markers",
-                        line=dict(color="#004D40", width=3),
-                        marker=dict(size=9, line=dict(color="white", width=2)),
-                        fill="tozeroy", fillcolor="rgba(0,77,64,0.06)")
-        fig.add_scatter(x=nw_df["Month"], y=nw_df["CPF OA"],
-                        name="CPF OA", mode="lines+markers",
-                        line=dict(color="#0D47A1", width=3, dash="dot"),
-                        marker=dict(size=9, symbol="diamond", line=dict(color="white", width=2)))
-        fig.add_scatter(x=nw_df["Month"], y=nw_df["Net Worth"],
-                        name="Total Net Worth", mode="lines+markers",
-                        line=dict(color="#E65100", width=2.5),
-                        marker=dict(size=8, symbol="square", line=dict(color="white", width=1.5)))
-        fig.update_layout(
-            **base_layout(height=380),
+        st.markdown(
+            f"<div style='font-size:12px;font-weight:600;color:#7A9E98;"
+            f"letter-spacing:1.2px;text-transform:uppercase;margin-bottom:12px'>"
+            f"Latest snapshot · {latest['Month']}</div>",
+            unsafe_allow_html=True
+        )
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Total Net Worth",
+                  f"S${latest['_NW']:,.0f}",
+                  f"S${nw_delta('_NW'):+,.0f} vs {prev['Month']}" if prev is not None else None)
+        k2.metric("Banking",
+                  f"S${latest['_Banking']:,.0f}",
+                  f"S${nw_delta('_Banking'):+,.0f}" if prev is not None else None)
+        k3.metric("Investments (IBKR)",
+                  f"S${latest['_Investments']:,.0f}",
+                  f"S${nw_delta('_Investments'):+,.0f}" if prev is not None else None)
+        k4.metric("CPF Total",
+                  f"S${latest['_CPF']:,.0f}",
+                  f"S${nw_delta('_CPF'):+,.0f}" if prev is not None else None)
+        k5.metric("Liquid Cash",
+                  f"S${latest['_Cash']:,.0f}",
+                  f"S${nw_delta('_Cash'):+,.0f}" if prev is not None else None)
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        # ── Net Worth over time ───────────────────────────────────────────────
+        col_nw, col_bk = st.columns([1.4, 1])
+
+        with col_nw:
+            st.markdown('<div class="section-title">Net Worth Over Time</div>', unsafe_allow_html=True)
+            fig_nw = go.Figure()
+            fig_nw.add_scatter(
+                x=nw_df["Month"], y=nw_df["_NW"],
+                name="Total Net Worth", mode="lines+markers",
+                line=dict(color="#E65100", width=3),
+                marker=dict(size=9, line=dict(color="white", width=2)),
+                fill="tozeroy", fillcolor="rgba(230,81,0,0.06)",
+                hovertemplate="<b>%{x}</b><br>S$%{y:,.0f}<extra></extra>",
+            )
+            fig_nw.add_scatter(
+                x=nw_df["Month"], y=nw_df["_Banking"],
+                name="Banking", mode="lines+markers",
+                line=dict(color="#004D40", width=2),
+                marker=dict(size=7, line=dict(color="white", width=1.5)),
+                hovertemplate="<b>%{x}</b> Banking: S$%{y:,.0f}<extra></extra>",
+            )
+            fig_nw.add_scatter(
+                x=nw_df["Month"], y=nw_df["_CPF"],
+                name="CPF", mode="lines+markers",
+                line=dict(color="#0D47A1", width=2, dash="dot"),
+                marker=dict(size=7, symbol="diamond", line=dict(color="white", width=1.5)),
+                hovertemplate="<b>%{x}</b> CPF: S$%{y:,.0f}<extra></extra>",
+            )
+            if nw_df["_Investments"].sum() > 0:
+                fig_nw.add_scatter(
+                    x=nw_df["Month"], y=nw_df["_Investments"],
+                    name="IBKR", mode="lines+markers",
+                    line=dict(color="#00897B", width=2),
+                    marker=dict(size=7, symbol="square", line=dict(color="white", width=1.5)),
+                    hovertemplate="<b>%{x}</b> IBKR: S$%{y:,.0f}<extra></extra>",
+                )
+            fig_nw.update_layout(
+                **base_layout(height=360),
+                yaxis=dict(**styled_yaxis(), tickformat=",.0f"),
+                xaxis=styled_xaxis(),
+                legend=dict(orientation="h", y=1.1, x=0, font_size=11),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_nw, use_container_width=True)
+
+        with col_bk:
+            st.markdown('<div class="section-title">Breakdown by Type</div>', unsafe_allow_html=True)
+            latest_breakdown = {
+                "Banking":     latest["_Banking"],
+                "CPF":         latest["_CPF"],
+                "Investments": latest["_Investments"],
+                "Liquid Cash": latest["_Cash"],
+            }
+            bd_df = pd.DataFrame([
+                {"Type": k, "Amount": v}
+                for k, v in latest_breakdown.items() if v > 0
+            ])
+            if not bd_df.empty:
+                fig_pie = px.pie(
+                    bd_df, values="Amount", names="Type",
+                    color_discrete_sequence=["#004D40","#0D47A1","#00897B","#E65100"],
+                    hole=0.52,
+                )
+                fig_pie.update_layout(
+                    **base_layout(height=360),
+                    legend=dict(orientation="v", x=1.02, y=0.5, font_size=11),
+                )
+                fig_pie.update_traces(
+                    textposition="inside", textinfo="percent",
+                    hovertemplate="<b>%{label}</b><br>S$%{value:,.0f}<extra></extra>",
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        # ── Stacked breakdown over time ───────────────────────────────────────
+        st.markdown('<div class="section-title">Asset Breakdown Over Time</div>', unsafe_allow_html=True)
+        fig_stack = go.Figure()
+        stack_layers = [
+            ("Banking",     "_Banking",     "#004D40"),
+            ("Investments", "_Investments", "#00897B"),
+            ("CPF",         "_CPF",         "#0D47A1"),
+            ("Liquid Cash", "_Cash",        "#E65100"),
+        ]
+        for label, col_key, color in stack_layers:
+            if nw_df[col_key].sum() == 0:
+                continue
+            fig_stack.add_bar(
+                x=nw_df["Month"], y=nw_df[col_key],
+                name=label, marker_color=color, marker_line_width=0, opacity=0.85,
+                hovertemplate=f"<b>%{{x}}</b> {label}: S$%{{y:,.0f}}<extra></extra>",
+            )
+        fig_stack.update_layout(
+            **base_layout(height=300),
+            barmode="stack",
             yaxis=dict(**styled_yaxis(), tickformat=",.0f"),
             xaxis=styled_xaxis(),
-            legend=dict(orientation="h", y=1.08, x=0, font_size=12),
+            legend=dict(orientation="h", y=1.1, x=0, font_size=11),
             hovermode="x unified",
+            bargap=0.3,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_stack, use_container_width=True)
 
-        cur = rows[months_nw.index(active_month)]
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Cash in Hand", f"S${cur['Cash']:,.0f}")
-        k2.metric("CPF OA",       f"S${cur['CPF OA']:,.0f}")
-        k3.metric("Total CPF",    f"S${cur['Total CPF']:,.0f}")
-        k4.metric("Net Worth",    f"S${cur['Net Worth']:,.0f}")
+        # ── Individual bank balances (latest month) ───────────────────────────
+        if BANK_COLS:
+            st.markdown('<div class="section-title">Bank Balances · Latest Month</div>', unsafe_allow_html=True)
+            bank_data = [(c, latest[c]) for c in BANK_COLS if latest[c] > 0]
+            if bank_data:
+                bk_df = pd.DataFrame(bank_data, columns=["Account", "Balance"])
+                bk_df = bk_df.sort_values("Balance", ascending=True)
+                bk_df["label"] = bk_df["Balance"].apply(lambda x: f"S${x:,.0f}")
+                fig_bk = px.bar(
+                    bk_df, x="Balance", y="Account", orientation="h",
+                    text="label", color="Balance",
+                    color_continuous_scale=[[0,"#B2DFDB"],[1,"#004D40"]],
+                )
+                fig_bk.update_traces(textposition="outside", textfont_size=11, marker_line_width=0)
+                fig_bk.update_layout(
+                    **base_layout(height=max(200, len(bank_data) * 50)),
+                    coloraxis_showscale=False, showlegend=False,
+                    xaxis=dict(**styled_xaxis(), tickprefix="S$", title=""),
+                    yaxis=dict(gridcolor="#EFF4F3", zeroline=False, title=""),
+                    margin=dict(l=0, r=120, t=24, b=0),
+                )
+                st.plotly_chart(fig_bk, use_container_width=True)
 
-        display_nw = nw_df.copy()
-        for col in ["Cash","CPF OA","Total CPF","Investments","Net Worth"]:
-            display_nw[col] = display_nw[col].apply(lambda x: f"S${x:,.0f}" if x > 0 else "—")
-        st.dataframe(display_nw, width="stretch", hide_index=True)
+        # ── CPF breakdown ─────────────────────────────────────────────────────
+        if CPF_COLS:
+            st.markdown('<div class="section-title">CPF Accounts · Latest Month</div>', unsafe_allow_html=True)
+            cpf_labels = {"CPF (OA)": "Ordinary (OA)", "CPF (SA)": "Special (SA)", "CPF (MA)": "MediSave (MA)"}
+            c1, c2, c3 = st.columns(3)
+            for col_w, cpf_col in zip([c1, c2, c3], CPF_COLS):
+                delta_val = nw_delta(cpf_col) if prev is not None else None
+                col_w.metric(
+                    cpf_labels.get(cpf_col, cpf_col),
+                    f"S${latest[cpf_col]:,.0f}",
+                    f"S${delta_val:+,.0f}" if delta_val is not None else None,
+                )
 
-        csv_nw = nw_df.to_csv(index=False).encode("utf-8")
+        # ── History table ─────────────────────────────────────────────────────
+        st.markdown('<div class="section-title">Full History</div>', unsafe_allow_html=True)
+        display_cols = ["Month"] + BANK_COLS + INV_COLS + CPF_COLS + (["Liquid Cash"] if CASH_COL else []) + (["Total networth"] if NW_COL else [])
+        display_cols = [c for c in display_cols if c in nw_df.columns]
+        display_hist = nw_df[display_cols].copy().iloc[::-1].reset_index(drop=True)
+        for c in display_cols[1:]:
+            display_hist[c] = display_hist[c].apply(lambda x: f"S${x:,.0f}" if x > 0 else "—")
+        st.dataframe(display_hist, width="stretch", hide_index=True)
+
+        csv_nw = nw_df[display_cols].to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Export Net Worth as CSV", csv_nw, "net_worth.csv", "text/csv")
-    else:
-        st.markdown("""
-        <div style='text-align:center;padding:70px 20px;color:#7A9E98;'>
-          <div style='font-size:56px'>🏦</div>
-          <div style='font-family:DM Serif Display,serif;font-size:20px;
-                      margin-top:16px;color:#004D40;'>
-            Enter your balances above to see the chart
-          </div>
-          <div style='font-size:13px;margin-top:8px'>
-            Track your cash, CPF, and investments month by month
-          </div>
-        </div>""", unsafe_allow_html=True)
