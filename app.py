@@ -1375,11 +1375,11 @@ elif page == "🏦  Net Worth":
                 )
                 fig_bk.update_traces(textposition="outside", textfont_size=11, marker_line_width=0)
                 fig_bk.update_layout(
-                    **base_layout(height=max(200, len(bank_data) * 50)),
+                    **base_layout(height=max(200, len(bank_data) * 50),
+                                  margin=dict(l=0, r=120, t=24, b=0)),
                     coloraxis_showscale=False, showlegend=False,
                     xaxis=dict(**styled_xaxis(), tickprefix="S$", title=""),
                     yaxis=dict(gridcolor="#EFF4F3", zeroline=False, title=""),
-                    margin=dict(l=0, r=120, t=24, b=0),
                 )
                 st.plotly_chart(fig_bk, use_container_width=True)
 
