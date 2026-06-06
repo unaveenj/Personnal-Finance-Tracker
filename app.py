@@ -402,68 +402,121 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
 
     # ── 3. Redundant subscriptions ──
     sub_cuts_list = [
-        ("ChatGPT",       28.59, "You already have Claude — cancel the duplicate"),
-        ("Spotify",       17.46, "YouTube Premium already includes YouTube Music"),
+        ("ChatGPT", 28.59, "Duplicate of Claude — you already have the better tool"),
+        ("Spotify",  17.46, "YouTube Premium includes YouTube Music — direct overlap"),
     ]
     sub_total = sum(a for _, a, _ in sub_cuts_list)
-    detail    = "; ".join(f"{n} (S${a:.0f})" for n, a, _ in sub_cuts_list)
+    detail    = "; ".join(f"{n} (S${a:.2f})" for n, a, _ in sub_cuts_list)
     recs.append(dict(
         priority="high",
         title="Cancel 2 redundant subscriptions — zero lifestyle change",
         body=(
             f"{detail}. "
-            f"These overlap with tools you already have (Claude, YouTube Premium). "
-            f"Cancelling takes 10 minutes."
+            f"These overlap with tools you already pay for (Claude, YouTube Premium). "
+            f"Cancelling takes 10 minutes and frees up S${sub_total:.0f}/month immediately."
         ),
-        action=f"Cancel today → save S${sub_total:.0f}/month",
+        action=f"Cancel today → save S${sub_total:.0f}/month = S${sub_total*12:.0f}/year",
         impact=sub_total * 12,
     ))
 
-    # ── 4. Investment gap ──
+    # ── 4. New large / unrecognised subscriptions ──
+    all_subs = exp_all[exp_all["Category"] == "Subscriptions"].copy()
+    if not all_subs.empty:
+        sub_freq = (
+            all_subs.groupby("Description")["Amount"]
+            .agg(count="count", total="sum")
+            .reset_index()
+        )
+        sub_freq["per_occ"] = sub_freq["total"] / sub_freq["count"]
+        known_subs = {
+            "chatgpt", "spotify", "claude", "netflix", "icloud", "youtube",
+            "hetzner vps", "ntuc membership", "gomo", "prime",
+            "avg antivirus", "newspaper",
+        }
+        new_big = sub_freq[
+            (~sub_freq["Description"].str.lower().isin(known_subs)) &
+            (sub_freq["per_occ"] >= 50)
+        ].sort_values("per_occ", ascending=False)
+        if not new_big.empty:
+            names_amts = "; ".join(
+                f"{r['Description']} (S${r['per_occ']:.0f}/occurrence, seen {r['count']}×)"
+                for _, r in new_big.iterrows()
+            )
+            flagged_total = new_big["per_occ"].sum()
+            recs.append(dict(
+                priority="med",
+                title="New large subscription(s) detected — confirm billing frequency",
+                body=(
+                    f"High-value subscriptions appeared recently: {names_amts}. "
+                    f"Verify whether these are monthly recurring charges or annual one-offs. "
+                    f"If monthly, they add <b>S${flagged_total*12:,.0f}/year</b> to your subscription bill."
+                ),
+                action="Log into each service and check your billing period",
+                impact=flagged_total * 12,
+            ))
+
+    # ── 5. Investment gap / bank account optimisation ──
     idle_monthly = avg_inc_mo * (all_rate / 100)
     if idle_monthly > 500:
         recs.append(dict(
             priority="high",
-            title="Your savings aren't working hard enough",
+            title="Maximise returns on your banking pile",
             body=(
-                f"With a {all_rate:.0f}% savings rate, you're generating ~S${idle_monthly:,.0f}/month of surplus. "
-                f"Sitting in a current account earns ~0.05%. "
-                f"Investing S${idle_monthly:,.0f}/month at 7% p.a. (VWRA) compounds to "
-                f"<b>S${idle_monthly * 12 * 10 * 1.07**5:,.0f}</b> in 10 years."
+                f"With a {all_rate:.0f}% savings rate, you generate ~S${idle_monthly:,.0f}/month of surplus. "
+                f"You're already investing via IBKR — great start. But large balances sitting in standard "
+                f"accounts earn sub-optimal rates. "
+                f"OCBC 360 and UOB One offer <b>3–4%+ p.a.</b> when salary credit + spend criteria are met. "
+                f"Continuing to DCA S${idle_monthly:,.0f}/month at 7% p.a. (VWRA) compounds to "
+                f"<b>S${idle_monthly * 12 * 10 * 1.07**5:,.0f}</b> over 10 years."
             ),
-            action="Set up monthly DCA on Endowus or Syfe — takes 15 minutes",
+            action="Review OCBC 360 / UOB One bonus interest tiers; continue IBKR DCA",
             impact=0,
         ))
 
-    # ── 5. Food spend vs SG benchmark ──
-    food_mo = exp_all[exp_all["Category"]=="Food"]["Amount"].sum() / N_MONTHS
-    if food_mo > 500:
-        saving = food_mo - 400
+    # ── 6. Food & dining vs SG benchmark ──
+    food_mo = exp_all[exp_all["Category"] == "Food & Dining"]["Amount"].sum() / N_MONTHS
+    if food_mo > 420:
+        saving = food_mo - 380
         recs.append(dict(
             priority="med",
-            title=f"Food spend is S${food_mo:,.0f}/month — above SG median",
+            title=f"Food & dining averaging S${food_mo:,.0f}/month — above SG median",
             body=(
-                f"SG median dining spend for a single person is S$300–500/month. "
-                f"You're at S${food_mo:,.0f}. Swapping 3 restaurant meals/week for hawker centre "
-                f"saves roughly S$15–25 per meal. "
-                f"Even cutting S${saving:.0f}/month adds S${saving*12:,.0f} to your annual savings."
+                f"SG median dining spend for a single person is S$300–400/month. "
+                f"You're averaging S${food_mo:,.0f} (travel months inflate this). "
+                f"Hawker centre vs restaurant saves S$15–25 per meal — "
+                f"3 swaps/week adds S${saving*12:,.0f} back to your savings annually."
             ),
-            action="Try hawker centre 3× per week instead of restaurants",
+            action="Set a S$380/month food budget; tag travel dining separately",
             impact=saving * 12,
         ))
 
-    # ── 6. Emergency fund check ──
+    # ── 7. Entertainment spike ──
+    ent_mo = exp_all[exp_all["Category"] == "Entertainment"]["Amount"].sum() / N_MONTHS
+    if ent_mo > 120:
+        recs.append(dict(
+            priority="med",
+            title=f"Entertainment averaging S${ent_mo:,.0f}/month — worth a ceiling",
+            body=(
+                f"Pokemon cards, movies and events averaged S${ent_mo:,.0f}/month. "
+                f"SG benchmark is S$50–150/month. "
+                f"A monthly hobby budget prevents lifestyle inflation without eliminating the enjoyment."
+            ),
+            action="Set a S$150/month entertainment cap; track Pokemon buys separately",
+            impact=max(0, ent_mo - 150) * 12,
+        ))
+
+    # ── 8. Bank yield optimisation ──
     core_monthly = avg_exp_mo
     recs.append(dict(
         priority="info",
-        title="Verify your emergency fund is fully funded",
+        title="Your emergency fund is strong — make sure it earns well",
         body=(
-            f"Your core monthly expenses average S${core_monthly:,.0f}. "
-            f"A 6-month buffer = <b>S${core_monthly*6:,.0f}</b>. "
-            f"Park it in CIMB FastSaver (~3% p.a.) or SingLife Account (~3.5% p.a.) — "
-            f"not in a current account. It earns while it waits."
+            f"Core monthly expenses average S${core_monthly:,.0f}. "
+            f"A 6-month buffer is S${core_monthly*6:,.0f} — you already exceed this comfortably. "
+            f"Maribank (2.5% p.a.), CIMB FastSaver (~3%), SingLife (~3.5%) all beat standard accounts. "
+            f"Excess above 6 months should flow into IBKR or CPF top-ups, not sit idle."
         ),
-        action=f"Target: S${core_monthly*6:,.0f} in a high-yield savings account",
+        action="Confirm liquid savings are in a high-yield account, not a current account",
         impact=0,
     ))
 
@@ -889,8 +942,8 @@ elif page == "💡  Insights":
     all_inc  = inc_all["Amount"].sum()
     all_exp  = exp_all["Amount"].sum()
     all_rate = (all_inc - all_exp) / all_inc * 100 if all_inc > 0 else 0
-    sub_exp  = exp_all[exp_all["Category"]=="Subscription"]["Amount"].sum()
-    sub_n    = len(exp_all[exp_all["Category"]=="Subscription"])
+    sub_exp  = exp_all[exp_all["Category"]=="Subscriptions"]["Amount"].sum()
+    sub_n    = len(exp_all[exp_all["Category"]=="Subscriptions"])
 
     # ── Dynamic month comparison ──────────────────────────────────────────────
     if selected_month != "All Time":
@@ -1073,19 +1126,21 @@ elif page == "💡  Insights":
     # ── Subscription audit ────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Subscription Audit</div>', unsafe_allow_html=True)
     subscriptions = [
-        ("Anytime Fitness",  89.00, "keep", "Great habit. Verify 3×/week+ attendance."),
-        ("AVG Antivirus",    82.62, "keep", "One-time annual payment — not a recurring subscription."),
-        ("Newspaper",        33.90, "rev",  "Only worth it if read daily. Free: CNA, ST (limited)."),
-        ("Claude",           30.00, "keep", "You're using it — keep."),
-        ("ChatGPT",          28.59, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo."),
-        ("Netflix",          22.98, "rev",  "Review overlap with YouTube Premium."),
-        ("Spotify",          17.46, "cut",  "YouTube Premium includes YouTube Music. Cancel → save S$17/mo."),
-        ("YouTube Premium",  17.98, "keep", "Includes ad-free + YouTube Music. Keep if cancelling Spotify."),
-        ("iCloud",           13.98, "keep", "Essential for iOS backup. Good value."),
-        ("Hetzner VPS",      13.45, "keep", "Dev server — keep if actively used."),
-        ("NTUC Membership",   9.00, "keep", "Pays for itself in FairPrice discounts."),
-        ("Gomo (mobile)",     7.00, "keep", "Very affordable SIM plan. Keep."),
-        ("Prime",             5.00, "rev",  "S$5 borderline — review if used regularly."),
+        ("Kodecloud",        101.80, "rev",  "New — cloud learning platform. Confirm monthly vs annual; worth it if actively used."),
+        ("Surfshark",        100.42, "rev",  "New VPN — confirm monthly vs annual billing. Justify if privacy is a priority."),
+        ("Anytime Fitness",   89.00, "keep", "Great habit. Verify 3×/week+ attendance."),
+        ("AVG Antivirus",     82.62, "keep", "One-time annual payment — not a recurring monthly subscription."),
+        ("Newspaper",         33.90, "rev",  "Only worth it if read daily. Free alternatives: CNA, ST (limited)."),
+        ("Claude",            30.00, "keep", "Actively used — keep. Cancelling ChatGPT makes this the only AI sub."),
+        ("ChatGPT",           28.59, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo immediately."),
+        ("Netflix",           22.98, "rev",  "Review overlap with YouTube Premium for content."),
+        ("Spotify",           17.46, "cut",  "YouTube Premium includes YouTube Music. Cancel → save S$17/mo."),
+        ("YouTube Premium",   17.98, "keep", "Includes ad-free + YouTube Music. Replaces Spotify if cancelled."),
+        ("iCloud",            13.98, "keep", "Essential for iOS backup. Good value at S$14/mo."),
+        ("Hetzner VPS",       13.45, "keep", "Dev server — keep if actively used for projects."),
+        ("NTUC Membership",    9.00, "keep", "Pays for itself in FairPrice discounts."),
+        ("Gomo (mobile)",      7.00, "keep", "Very affordable SIM plan. Keep."),
+        ("Prime",              4.99, "rev",  "S$5 — review if delivery / Prime Video is used regularly."),
     ]
     pill_class = {"cut":"pill-cut","keep":"pill-keep","rev":"pill-rev"}
     pill_label = {"cut":"❌ Cut","keep":"✅ Keep","rev":"🟡 Review"}
@@ -1118,12 +1173,12 @@ elif page == "💡  Insights":
         return exp_all[exp_all["Category"]==cat]["Amount"].sum() / N_MONTHS
 
     benchmarks = [
-        ("Food",          m_avg("Food"),          300, 500, "Dining out avg — reasonable for SG"),
-        ("Groceries",     m_avg("Grocery"),         150, 250, "Low — you dine out more than cook"),
-        ("Transport",     m_avg("Transport"),       100, 200, "Very low — mostly bus. Excellent."),
-        ("Subscriptions", sub_exp / N_MONTHS,       50,  120, "Above typical range — audit recommended"),
-        ("Shopping",      m_avg("Shopping"),        200, 400, "Mix of everyday + KL shopping"),
-        ("Entertainment", m_avg("Entertainment"),   50,  150, "Including Pokemon hobby"),
+        ("Food & Dining",  m_avg("Food & Dining"),  300, 400, "SG median for a single person; travel months inflate this"),
+        ("Groceries",      m_avg("Groceries"),       150, 250, "Low — you dine out more than cook at home"),
+        ("Transport",      m_avg("Transport"),       100, 200, "Very low — mostly bus/MRT. Excellent."),
+        ("Subscriptions",  sub_exp / N_MONTHS,        50, 120, "Above typical range — audit the new additions"),
+        ("Shopping",       m_avg("Shopping"),        200, 400, "Mix of everyday + KL travel shopping"),
+        ("Entertainment",  m_avg("Entertainment"),    50, 150, "Pokemon cards + movies — worth capping"),
     ]
 
     hdr2 = st.columns([2, 1, 1, 1, 3])
