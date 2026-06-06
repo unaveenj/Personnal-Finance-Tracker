@@ -1195,7 +1195,7 @@ elif page == "💳  Transactions":
 elif page == "🏦  Net Worth":
     st.markdown('<div class="page-title">Net Worth Tracker</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-subtitle">Live from your Google Sheet · refreshes every 5 min</div>',
+        '<div class="page-subtitle">Live from your Google Sheet</div>',
         unsafe_allow_html=True
     )
 
