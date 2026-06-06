@@ -1439,25 +1439,36 @@ elif page == "🏦  Net Worth":
             unsafe_allow_html=True,
         )
 
-        # Reference benchmarks (married household, excl. property)
-        # Sources: UBS Global Wealth Databook 2024; SingStat Household Expenditure
-        # Survey 2023; CPF Board Annual Report 2024; MAS Financial Wellness data.
-        # NW percentiles derived from UBS individual estimates × 2 for household,
-        # adjusted for SG wealth distribution. CPF benchmarks use median active-
-        # member balances for the 25–34 age cohort. Cash/investment figures from
-        # OCBC Financial Wellness Index 2024 & SingStat savings-rate data.
+        # Reference benchmarks
+        # ── Net Worth (married household, excl. property) ──────────────────────
+        # No official SG age-stratified NW table exists. Estimates derived from:
+        #   • UBS Global Wealth Databook 2024 (median adult NW ≈ S$134K, all ages)
+        #     scaled to household (×2) for 25–35 cohort
+        #   • MOF Occasional Paper Feb 2026 / SingStat HES 2023 (avg HH NW S$1.755M,
+        #     all ages incl. property → stripped back for young, non-property cohort)
+        #   • Financial Horse / SingSaver planning benchmarks 2026
+        # ── CPF (individual, one person) ───────────────────────────────────────
+        # Official CPF Board data (cpf.gov.sg, balances as at 31 Dec 2025):
+        #   Ages 25–30: 271K members, S$16.01B total → avg S$59,100/person
+        #   Ages 30–35: 327K members, S$37.42B total → avg S$114,400/person
+        #   Ages 35–40: 337K members, S$54.38B total → avg S$161,400/person
+        # Median < average (right-skewed dist.); est. median ~80–85% of average.
+        # ── Cash / Investments (household) ─────────────────────────────────────
+        # OCBC Financial Wellness Index 2024; SingStat personal savings-rate data
+        # (10-yr avg 31.1%); DBS Gen-Z/Millennial study Jun 2024 (2M customers).
         BM = dict(
-            nw_p50  = 220_000,   # Household median NW excl. property
-            nw_p75  = 480_000,   # 75th percentile
-            nw_p90  = 820_000,   # 90th percentile
-            bank_p50 = 50_000,   # Median household cash/bank savings
-            bank_p75 = 100_000,
-            inv_p50  = 30_000,   # Median household investments
-            inv_p75  = 80_000,
-            cpf_p50  = 130_000,  # Household CPF (both partners working, age 30–35)
-            cpf_p75  = 210_000,
-            sav_rate_avg = 31.5, # SG average household savings rate (SingStat 2025)
-            sav_rate_top = 40.0, # Top-saver threshold
+            nw_p50      = 250_000,   # Household median NW excl. property (25–35)
+            nw_p75      = 480_000,   # 75th percentile household NW
+            nw_p90      = 820_000,   # 90th percentile household NW
+            bank_p50    =  70_000,   # Median household cash/bank savings
+            bank_p75    = 140_000,   # 75th percentile household cash
+            inv_p50     =  30_000,   # Median household investments (equities/ETFs)
+            inv_p75     =  80_000,   # 75th percentile household investments
+            cpf_ind_avg =114_400,    # Official avg individual CPF, ages 30–35 (Dec 2025)
+            cpf_ind_p50 =  95_000,   # Est. median individual CPF (avg × ~0.83)
+            cpf_ind_p75 = 160_000,   # Est. 75th-percentile individual CPF
+            sav_rate_avg = 31.5,     # SG avg household savings rate (SingStat 2025)
+            sav_rate_top = 40.0,     # Top-saver threshold
         )
 
         u_nw   = float(latest["_NW"])
@@ -1512,10 +1523,10 @@ elif page == "🏦  Net Worth":
         """, unsafe_allow_html=True)
 
         # ── Grouped comparison bar chart ──────────────────────────────────────
-        comp_cats = ["Total Net Worth", "Banking & Cash", "Investments (IBKR)", "CPF (household)"]
+        comp_cats = ["Total Net Worth", "Banking & Cash", "Investments (IBKR)", "CPF (individual)"]
         user_vals = [u_nw,    u_cash_total, u_inv,           u_cpf]
-        med_vals  = [BM["nw_p50"], BM["bank_p50"], BM["inv_p50"], BM["cpf_p50"]]
-        p75_vals  = [BM["nw_p75"], BM["bank_p75"], BM["inv_p75"], BM["cpf_p75"]]
+        med_vals  = [BM["nw_p50"], BM["bank_p50"], BM["inv_p50"], BM["cpf_ind_p50"]]
+        p75_vals  = [BM["nw_p75"], BM["bank_p75"], BM["inv_p75"], BM["cpf_ind_p75"]]
 
         fig_comp = go.Figure()
         fig_comp.add_bar(
@@ -1567,10 +1578,10 @@ elif page == "🏦  Net Worth":
              f"Investments ≥ S${BM['inv_p75']:,} (SG Top 25%)",
              f"S${u_inv:,.0f} — above the 75th-percentile benchmark"),
             (u_cpf >= 100_000,
-             "Household CPF ≥ S$100,000",
+             "Individual CPF ≥ S$100,000",
              f"S${u_cpf:,.0f} across OA, SA & MediSave"),
-            (u_cpf >= BM["cpf_p75"],
-             f"CPF in top 25% for this age group (≥ S${BM['cpf_p75']:,})",
+            (u_cpf >= BM["cpf_ind_p75"],
+             f"CPF in top 25% for this age group (≥ S${BM['cpf_ind_p75']:,})",
              f"S${u_cpf:,.0f} total CPF"),
             (u_nw >= BM["nw_p50"],
              "Net worth above SG peer median",
@@ -1611,7 +1622,7 @@ elif page == "🏦  Net Worth":
              "Median for 25–35: S$18K–42K."),
             ("MA · MediSave",         "CPF (MA)", 26_000,  50_000,
              "4% p.a. interest. Healthcare savings. "
-             "Basic Healthcare Sum 2025: S$71,500."),
+             "Basic Healthcare Sum 2026: S$79,000."),
         ]
         cpf_cols_out = st.columns(3)
         for col_w, (lbl, col_key, lo, hi, note) in zip(cpf_cols_out, cpf_bm_rows):
