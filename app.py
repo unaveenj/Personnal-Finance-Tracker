@@ -224,7 +224,8 @@ def load_networth():
         return pd.DataFrame()
     df.columns = df.columns.str.strip()
     numeric_cols = ["DBS","Maribank","UOB","OCBC","Citi","Chocolate",
-                    "IBKR","CPF (OA)","CPF (SA)","CPF (MA)","Liquid Cash","Total networth"]
+                    "IBKR","CPF (OA)","CPF (SA)","CPF (MA)",
+                    "Wife savings cash","Liquid Cash","Total networth"]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(
@@ -1264,17 +1265,20 @@ elif page == "🏦  Net Worth":
     BANK_COLS = [c for c in ["DBS","Maribank","UOB","OCBC","Citi","Chocolate"] if c in nw_df.columns]
     INV_COLS  = [c for c in ["IBKR"] if c in nw_df.columns]
     CPF_COLS  = [c for c in ["CPF (OA)","CPF (SA)","CPF (MA)"] if c in nw_df.columns]
+    WIFE_COL  = "Wife savings cash" if "Wife savings cash" in nw_df.columns else None
     CASH_COL  = "Liquid Cash" if "Liquid Cash" in nw_df.columns else None
     NW_COL    = "Total networth" if "Total networth" in nw_df.columns else None
 
     nw_df["_Banking"]     = nw_df[BANK_COLS].sum(axis=1) if BANK_COLS else 0
     nw_df["_Investments"] = nw_df[INV_COLS].sum(axis=1)  if INV_COLS  else 0
     nw_df["_CPF"]         = nw_df[CPF_COLS].sum(axis=1)  if CPF_COLS  else 0
+    nw_df["_Family"]      = nw_df[WIFE_COL] if WIFE_COL else 0
     nw_df["_Cash"]        = nw_df[CASH_COL] if CASH_COL else 0
     if NW_COL:
         nw_df["_NW"] = nw_df[NW_COL]
     else:
-        nw_df["_NW"] = nw_df["_Banking"] + nw_df["_Investments"] + nw_df["_CPF"] + nw_df["_Cash"]
+        nw_df["_NW"] = (nw_df["_Banking"] + nw_df["_Investments"]
+                        + nw_df["_CPF"] + nw_df["_Family"])
 
     has_data = len(nw_df) > 0 and nw_df["_NW"].sum() > 0
 
@@ -1297,7 +1301,7 @@ elif page == "🏦  Net Worth":
             unsafe_allow_html=True
         )
 
-        k1, k2, k3, k4, k5 = st.columns(5)
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
         k1.metric("Total Net Worth",
                   f"S${latest['_NW']:,.0f}",
                   f"S${nw_delta('_NW'):+,.0f} vs {prev['Month']}" if prev is not None else None)
@@ -1310,7 +1314,11 @@ elif page == "🏦  Net Worth":
         k4.metric("CPF Total",
                   f"S${latest['_CPF']:,.0f}",
                   f"S${nw_delta('_CPF'):+,.0f}" if prev is not None else None)
-        k5.metric("Liquid Cash",
+        if WIFE_COL:
+            k5.metric("Wife Savings",
+                      f"S${latest['_Family']:,.0f}",
+                      f"S${nw_delta('_Family'):+,.0f}" if prev is not None else None)
+        k6.metric("Liquid (non-CPF)",
                   f"S${latest['_Cash']:,.0f}",
                   f"S${nw_delta('_Cash'):+,.0f}" if prev is not None else None)
 
@@ -1352,6 +1360,14 @@ elif page == "🏦  Net Worth":
                     marker=dict(size=7, symbol="square", line=dict(color="white", width=1.5)),
                     hovertemplate="<b>%{x}</b> IBKR: S$%{y:,.0f}<extra></extra>",
                 )
+            if WIFE_COL and nw_df["_Family"].sum() > 0:
+                fig_nw.add_scatter(
+                    x=nw_df["Month"], y=nw_df["_Family"],
+                    name="Wife Savings", mode="lines+markers",
+                    line=dict(color="#9C27B0", width=2, dash="dash"),
+                    marker=dict(size=7, symbol="star", line=dict(color="white", width=1.5)),
+                    hovertemplate="<b>%{x}</b> Wife Savings: S$%{y:,.0f}<extra></extra>",
+                )
             fig_nw.update_layout(
                 **base_layout(height=360),
                 yaxis=dict(**styled_yaxis(), tickformat=",.0f"),
@@ -1364,10 +1380,10 @@ elif page == "🏦  Net Worth":
         with col_bk:
             st.markdown('<div class="section-title">Breakdown by Type</div>', unsafe_allow_html=True)
             latest_breakdown = {
-                "Banking":     latest["_Banking"],
-                "CPF":         latest["_CPF"],
-                "Investments": latest["_Investments"],
-                "Liquid Cash": latest["_Cash"],
+                "Banking":      latest["_Banking"],
+                "CPF":          latest["_CPF"],
+                "Investments":  latest["_Investments"],
+                "Wife Savings": latest["_Family"],
             }
             bd_df = pd.DataFrame([
                 {"Type": k, "Amount": v}
@@ -1376,7 +1392,7 @@ elif page == "🏦  Net Worth":
             if not bd_df.empty:
                 fig_pie = px.pie(
                     bd_df, values="Amount", names="Type",
-                    color_discrete_sequence=["#004D40","#0D47A1","#00897B","#E65100"],
+                    color_discrete_sequence=["#004D40","#0D47A1","#00897B","#9C27B0"],
                     hole=0.52,
                 )
                 fig_pie.update_layout(
@@ -1393,10 +1409,10 @@ elif page == "🏦  Net Worth":
         st.markdown('<div class="section-title">Asset Breakdown Over Time</div>', unsafe_allow_html=True)
         fig_stack = go.Figure()
         stack_layers = [
-            ("Banking",     "_Banking",     "#004D40"),
-            ("Investments", "_Investments", "#00897B"),
-            ("CPF",         "_CPF",         "#0D47A1"),
-            ("Liquid Cash", "_Cash",        "#E65100"),
+            ("Banking",       "_Banking",     "#004D40"),
+            ("Investments",   "_Investments", "#00897B"),
+            ("CPF",           "_CPF",         "#0D47A1"),
+            ("Wife Savings",  "_Family",      "#9C27B0"),
         ]
         for label, col_key, color in stack_layers:
             if nw_df[col_key].sum() == 0:
@@ -1455,7 +1471,12 @@ elif page == "🏦  Net Worth":
 
         # ── History table ─────────────────────────────────────────────────────
         st.markdown('<div class="section-title">Full History</div>', unsafe_allow_html=True)
-        display_cols = ["Month"] + BANK_COLS + INV_COLS + CPF_COLS + (["Liquid Cash"] if CASH_COL else []) + (["Total networth"] if NW_COL else [])
+        display_cols = (
+            ["Month"] + BANK_COLS + INV_COLS + CPF_COLS
+            + (["Wife savings cash"] if WIFE_COL else [])
+            + (["Liquid Cash"] if CASH_COL else [])
+            + (["Total networth"] if NW_COL else [])
+        )
         display_cols = [c for c in display_cols if c in nw_df.columns]
         display_hist = nw_df[display_cols].copy().iloc[::-1].reset_index(drop=True)
         for c in display_cols[1:]:
@@ -1486,11 +1507,14 @@ elif page == "❤️  Financial Health":
 
     nw_fh = load_networth()
     if not nw_fh.empty:
-        BANK_FH     = [c for c in ["DBS", "Maribank", "UOB", "OCBC", "Citi", "Chocolate"] if c in nw_fh.columns]
-        nw_latest   = nw_fh.iloc[-1]
-        liquid_cash = float(nw_latest.get("Liquid Cash", 0) or 0)
-        banking_tot = sum(float(nw_latest.get(c, 0) or 0) for c in BANK_FH)
-        ef_pool     = banking_tot + liquid_cash
+        BANK_FH      = [c for c in ["DBS", "Maribank", "UOB", "OCBC", "Citi", "Chocolate"] if c in nw_fh.columns]
+        nw_latest    = nw_fh.iloc[-1]
+        banking_tot  = sum(float(nw_latest.get(c, 0) or 0) for c in BANK_FH)
+        wife_savings = float(nw_latest.get("Wife savings cash", 0) or 0)
+        # Use banking + wife savings as the true accessible cash pool.
+        # "Liquid Cash" in the sheet is a derived subtotal (banking + IBKR + wife savings)
+        # and must NOT be used here to avoid double-counting.
+        ef_pool      = banking_tot + wife_savings
     else:
         ef_pool = None
 
@@ -1500,8 +1524,10 @@ elif page == "❤️  Financial Health":
         ef_status  = "good" if ef_val >= 6 else ("warn" if ef_val >= 3 else "bad")
         ef_pct_bar = min(ef_val / 9 * 100, 100)
         ef_target  = 6 / 9 * 100
+        wife_note  = f" + wife savings S${wife_savings:,.0f}" if wife_savings > 0 else ""
         ef_detail  = (
-            f"You have <b>S${ef_pool:,.0f}</b> in accessible savings (banking + liquid cash) "
+            f"You have <b>S${ef_pool:,.0f}</b> in accessible savings "
+            f"(banking S${banking_tot:,.0f}{wife_note}), "
             f"covering <b>{ef_val:.1f} months</b> of your average monthly expenses "
             f"of <b>S${avg_monthly_exp:,.0f}</b>."
         )
