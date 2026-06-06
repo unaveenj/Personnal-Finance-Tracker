@@ -494,6 +494,7 @@ with st.sidebar:
         "💡  Insights",
         "💳  Transactions",
         "🏦  Net Worth",
+        "❤️  Financial Health",
     ], label_visibility="collapsed")
 
     st.markdown("---")
@@ -1408,3 +1409,356 @@ elif page == "🏦  Net Worth":
 
         csv_nw = nw_df[display_cols].to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Export Net Worth as CSV", csv_nw, "net_worth.csv", "text/csv")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: FINANCIAL HEALTH
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "❤️  Financial Health":
+    st.markdown('<div class="page-title">Financial Health</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="page-subtitle">'
+        'Key financial ratios benchmarked against Monetary Authority of Singapore guidelines'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Data preparation ──────────────────────────────────────────────────────
+    N_MONTHS_FH     = max(len(MONTHS), 1)
+    avg_monthly_exp = exp_all["Amount"].sum() / N_MONTHS_FH
+    avg_monthly_inc = inc_all["Amount"].sum() / N_MONTHS_FH
+    avg_monthly_sav = avg_monthly_inc - avg_monthly_exp
+
+    nw_fh = load_networth()
+    if not nw_fh.empty:
+        BANK_FH     = [c for c in ["DBS", "Maribank", "UOB", "OCBC", "Citi", "Chocolate"] if c in nw_fh.columns]
+        nw_latest   = nw_fh.iloc[-1]
+        liquid_cash = float(nw_latest.get("Liquid Cash", 0) or 0)
+        banking_tot = sum(float(nw_latest.get(c, 0) or 0) for c in BANK_FH)
+        ef_pool     = banking_tot + liquid_cash
+    else:
+        ef_pool = None
+
+    # Emergency Fund ratio
+    if ef_pool is not None and avg_monthly_exp > 0:
+        ef_val = ef_pool / avg_monthly_exp
+        ef_status  = "good" if ef_val >= 6 else ("warn" if ef_val >= 3 else "bad")
+        ef_pct_bar = min(ef_val / 9 * 100, 100)
+        ef_target  = 6 / 9 * 100
+        ef_detail  = (
+            f"You have <b>S${ef_pool:,.0f}</b> in accessible savings (banking + liquid cash) "
+            f"covering <b>{ef_val:.1f} months</b> of your average monthly expenses "
+            f"of <b>S${avg_monthly_exp:,.0f}</b>."
+        )
+    else:
+        ef_val, ef_pct_bar, ef_target = None, 0, 66.7
+        ef_status = "na"
+        ef_detail = (
+            "Net worth data not available. Populate your Networth sheet to see this metric."
+        )
+
+    # Savings Ratio
+    if avg_monthly_inc > 0:
+        sav_val    = avg_monthly_sav / avg_monthly_inc * 100
+        sav_status = "good" if sav_val >= 15 else ("warn" if sav_val >= 10 else "bad")
+        sav_pct_bar = min(max(sav_val, 0) / 30 * 100, 100)
+        sav_target  = 15 / 30 * 100
+        sav_detail  = (
+            f"Average monthly savings of <b>S${avg_monthly_sav:,.0f}</b> on average income "
+            f"of <b>S${avg_monthly_inc:,.0f}</b> — a savings rate of <b>{sav_val:.1f}%</b>. "
+            f"Note: your tracked income is take-home pay; gross income (pre-CPF) would yield "
+            f"a slightly lower ratio."
+        )
+    else:
+        sav_val, sav_pct_bar, sav_target = None, 0, 50
+        sav_status = "na"
+        sav_detail = "No income data found in your transactions."
+
+    # Debt ratios — auto-detect by category name
+    LOAN_KEYWORDS = ["loan", "mortgage", "debt", "repay", "installment", "instalment"]
+    all_cats = exp_all["Category"].unique()
+    loan_cats    = [c for c in all_cats if any(k in c.lower() for k in LOAN_KEYWORDS)]
+    nonmtg_cats  = [c for c in loan_cats if not any(k in c.lower() for k in ["mortgage", "home loan"])]
+
+    if loan_cats and avg_monthly_inc > 0:
+        avg_loan    = exp_all[exp_all["Category"].isin(loan_cats)]["Amount"].sum() / N_MONTHS_FH
+        tdsr_val    = avg_loan / avg_monthly_inc * 100
+        tdsr_status = "good" if tdsr_val <= 25 else ("warn" if tdsr_val <= 35 else "bad")
+        tdsr_pct_bar = min(tdsr_val / 50 * 100, 100)
+        tdsr_target  = 35 / 50 * 100
+        tdsr_detail  = (
+            f"Average monthly loan repayments: <b>S${avg_loan:,.0f}</b> "
+            f"(categories: {', '.join(loan_cats)})."
+        )
+    else:
+        tdsr_val, tdsr_pct_bar, tdsr_target = None, 0, 70
+        tdsr_status = "na"
+        tdsr_detail = (
+            "No loan repayment categories detected. To track this ratio, add expenses "
+            "with a category containing a keyword like <em>Loan</em>, <em>Mortgage</em>, "
+            "<em>Debt</em>, or <em>Repayment</em>."
+        )
+
+    if nonmtg_cats and avg_monthly_inc > 0:
+        avg_nm_loan  = exp_all[exp_all["Category"].isin(nonmtg_cats)]["Amount"].sum() / N_MONTHS_FH
+        ndsr_val     = avg_nm_loan / avg_monthly_inc * 100
+        ndsr_status  = "good" if ndsr_val <= 10 else ("warn" if ndsr_val <= 15 else "bad")
+        ndsr_pct_bar = min(ndsr_val / 30 * 100, 100)
+        ndsr_target  = 15 / 30 * 100
+        ndsr_detail  = (
+            f"Average monthly non-mortgage repayments: <b>S${avg_nm_loan:,.0f}</b> "
+            f"(categories: {', '.join(nonmtg_cats)})."
+        )
+    else:
+        ndsr_val, ndsr_pct_bar, ndsr_target = None, 0, 50
+        ndsr_status = "na"
+        ndsr_detail = (
+            "No non-mortgage loan categories detected. Separate mortgage and non-mortgage "
+            "loans by using specific category names to unlock this metric."
+        )
+
+    # ── Overall health score ──────────────────────────────────────────────────
+    STATUS_SCORE = {"good": 100, "warn": 55, "bad": 15}
+    scored = [(s, STATUS_SCORE[s]) for s in [ef_status, sav_status, tdsr_status, ndsr_status]
+              if s in STATUS_SCORE]
+    if scored:
+        overall = sum(v for _, v in scored) / len(scored)
+        if overall >= 80:   ov_label, ov_color, ov_text = "Excellent", "#DCFCE7", "#1B5E20"
+        elif overall >= 60: ov_label, ov_color, ov_text = "Good",      "#D1FAE5", "#2E7D32"
+        elif overall >= 40: ov_label, ov_color, ov_text = "Fair",      "#FEF3C7", "#E65100"
+        else:               ov_label, ov_color, ov_text = "Needs Work","#FEE2E2", "#B71C1C"
+        tracked = len(scored)
+    else:
+        overall, ov_label, ov_color, ov_text, tracked = None, "Incomplete", "#F2F6F5", "#7A9E98", 0
+
+    # ── Overall score banner ──────────────────────────────────────────────────
+    banner_score = f"{overall:.0f}" if overall is not None else "—"
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#004D40 0%,#00695C 100%);
+                border-radius:20px;padding:28px 36px;margin-bottom:28px;
+                display:flex;align-items:center;justify-content:space-between;
+                box-shadow:0 4px 20px rgba(0,77,64,0.25)">
+      <div>
+        <div style="font-size:11px;font-weight:700;letter-spacing:2px;
+                    text-transform:uppercase;color:#80CBC4;margin-bottom:8px">
+          Overall Financial Health Score
+        </div>
+        <div style="font-family:'DM Serif Display',serif;font-size:18px;color:#FFFFFF;">
+          Based on {tracked} of 4 ratios tracked
+        </div>
+        <div style="font-size:12px;color:#80CBC4;margin-top:6px;line-height:1.6">
+          Emergency Funds · Savings Ratio · TDSR · Non-Mortgage DSR
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-family:'DM Serif Display',serif;font-size:64px;
+                    color:#FFFFFF;line-height:1">{banner_score}</div>
+        <div style="background:{ov_color};color:{ov_text};border-radius:100px;
+                    padding:6px 22px;font-size:13px;font-weight:700;
+                    display:inline-block;margin-top:6px">{ov_label}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Ratio card helper ─────────────────────────────────────────────────────
+    def ratio_card(label, icon, value, unit, guideline, pct_bar, target_pct,
+                   status, detail, lower_is_better=False):
+        if status == "good":
+            bar_color, badge_bg, badge_fg, badge_text = "#00BFA5", "#DCFCE7", "#166534", "✅ Healthy"
+        elif status == "warn":
+            bar_color, badge_bg, badge_fg, badge_text = "#FF8F00", "#FEF3C7", "#92400E", "⚠️ Needs Attention"
+        elif status == "bad":
+            bar_color, badge_bg, badge_fg, badge_text = "#EF5350", "#FEE2E2", "#991B1B", "🚨 At Risk"
+        else:
+            bar_color, badge_bg, badge_fg, badge_text = "#B0BEC5", "#F2F6F5", "#546E7A", "ℹ️ Not Tracked"
+
+        val_str = f"{value:.1f}{unit}" if value is not None else "—"
+        left_border = "#00BFA5" if status == "good" else (
+                      "#FF8F00" if status == "warn" else (
+                      "#EF5350" if status == "bad" else "#B0BEC5"))
+
+        # Progress bar with target marker
+        bar_html = f"""
+        <div style="position:relative;height:8px;background:#EFF4F3;
+                    border-radius:100px;margin:14px 0 4px">
+          <div style="width:{pct_bar:.1f}%;height:100%;background:{bar_color};
+                      border-radius:100px;transition:width 0.4s ease"></div>
+          <div style="position:absolute;top:-5px;left:{target_pct:.1f}%;
+                      height:18px;width:3px;background:#E65100;border-radius:2px"
+               title="Target threshold"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;
+                    font-size:10px;color:#7A9E98;margin-bottom:4px">
+          <span>0</span>
+          <span style="color:#E65100;font-weight:600">▲ target</span>
+          <span>Max</span>
+        </div>
+        """
+
+        return f"""
+        <div style="background:#FFFFFF;border-radius:16px;padding:24px 26px;
+                    border:1px solid #DDE9E7;border-left:4px solid {left_border};
+                    box-shadow:0 2px 12px rgba(0,77,64,0.07);margin-bottom:18px;
+                    height:100%">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;
+                      margin-bottom:4px">
+            <div style="font-size:11px;font-weight:700;letter-spacing:1.4px;
+                        text-transform:uppercase;color:#7A9E98">
+              {icon}&nbsp; {label}
+            </div>
+            <div style="background:{badge_bg};color:{badge_fg};border-radius:100px;
+                        padding:4px 12px;font-size:10px;font-weight:700;
+                        letter-spacing:0.3px;white-space:nowrap">
+              {badge_text}
+            </div>
+          </div>
+          <div style="font-family:'DM Serif Display',serif;font-size:40px;
+                      color:{left_border};line-height:1.1;margin:8px 0 2px">
+            {val_str}
+          </div>
+          {bar_html}
+          <div style="font-size:12px;color:#556B67;line-height:1.75;margin-top:10px">
+            {detail}
+          </div>
+          <div style="margin-top:14px;font-size:11px;font-weight:700;
+                      color:{badge_fg};background:{badge_bg};
+                      border-radius:8px;padding:6px 12px;display:inline-block">
+            Guideline: {guideline}
+          </div>
+        </div>
+        """
+
+    # ── Four ratio cards in 2×2 grid ─────────────────────────────────────────
+    st.markdown('<div class="section-title">Financial Ratios</div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2, gap="medium")
+    with col1:
+        st.markdown(ratio_card(
+            "Emergency Funds", "🏦",
+            ef_val, " months",
+            "6 – 9 months of expenses",
+            ef_pct_bar, ef_target,
+            ef_status, ef_detail,
+        ), unsafe_allow_html=True)
+
+        st.markdown(ratio_card(
+            "Total Debt Servicing Ratio", "💳",
+            tdsr_val, "%",
+            "35% or less of gross income",
+            tdsr_pct_bar, tdsr_target,
+            tdsr_status, tdsr_detail,
+            lower_is_better=True,
+        ), unsafe_allow_html=True)
+
+    with col2:
+        st.markdown(ratio_card(
+            "Savings Ratio", "💰",
+            sav_val, "%",
+            ">15% of gross income",
+            sav_pct_bar, sav_target,
+            sav_status, sav_detail,
+        ), unsafe_allow_html=True)
+
+        st.markdown(ratio_card(
+            "Non-Mortgage Debt Servicing Ratio", "📋",
+            ndsr_val, "%",
+            "15% or less of take-home income",
+            ndsr_pct_bar, ndsr_target,
+            ndsr_status, ndsr_detail,
+            lower_is_better=True,
+        ), unsafe_allow_html=True)
+
+    # ── Supporting metrics strip ──────────────────────────────────────────────
+    st.markdown('<div class="section-title">All-Time Monthly Averages</div>', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Avg Monthly Income",   f"S${avg_monthly_inc:,.0f}")
+    c2.metric("Avg Monthly Expenses", f"S${avg_monthly_exp:,.0f}")
+    sav_delta = f"{sav_val:.1f}% savings rate" if sav_val is not None else None
+    c3.metric("Avg Monthly Savings",  f"S${avg_monthly_sav:,.0f}", delta=sav_delta)
+
+    # ── Plotly gauge charts ───────────────────────────────────────────────────
+    st.markdown('<div class="section-title">Visual Gauges</div>', unsafe_allow_html=True)
+
+    def make_gauge(title, value, max_val, target, unit, good_range, warn_range):
+        if value is None:
+            value = 0
+            bar_color = "#B0BEC5"
+        elif good_range[0] <= value <= good_range[1]:
+            bar_color = "#00BFA5"
+        elif warn_range[0] <= value <= warn_range[1]:
+            bar_color = "#FF8F00"
+        else:
+            bar_color = "#EF5350"
+
+        steps = [
+            dict(range=[0, warn_range[0]], color="#DCFCE7"),
+            dict(range=[warn_range[0], target], color="#FEF3C7"),
+            dict(range=[target, max_val], color="#FEE2E2"),
+        ]
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=value,
+            number={"suffix": unit, "font": {"size": 28, "family": "DM Serif Display"}},
+            title={"text": title, "font": {"size": 13, "color": "#7A9E98"}},
+            gauge=dict(
+                axis=dict(range=[0, max_val], tickfont=dict(size=10)),
+                bar=dict(color=bar_color, thickness=0.6),
+                steps=steps,
+                threshold=dict(
+                    line=dict(color="#E65100", width=3),
+                    thickness=0.85,
+                    value=target,
+                ),
+                bgcolor="#F2F6F5",
+                borderwidth=0,
+            ),
+        ))
+        fig.update_layout(
+            height=220,
+            margin=dict(l=20, r=20, t=40, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(family="DM Sans"),
+        )
+        return fig
+
+    g1, g2, g3, g4 = st.columns(4)
+    with g1:
+        st.plotly_chart(make_gauge(
+            "Emergency Fund", ef_val, 12, 6, " mo",
+            good_range=(6, 12), warn_range=(3, 6),
+        ), use_container_width=True)
+    with g2:
+        st.plotly_chart(make_gauge(
+            "Savings Ratio", sav_val, 30, 15, "%",
+            good_range=(15, 30), warn_range=(10, 15),
+        ), use_container_width=True)
+    with g3:
+        st.plotly_chart(make_gauge(
+            "Total DSR", tdsr_val, 50, 35, "%",
+            good_range=(0, 25), warn_range=(25, 35),
+        ), use_container_width=True)
+    with g4:
+        st.plotly_chart(make_gauge(
+            "Non-Mortgage DSR", ndsr_val, 30, 15, "%",
+            good_range=(0, 10), warn_range=(10, 15),
+        ), use_container_width=True)
+
+    # ── Methodology note ──────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="background:#F2F6F5;border-radius:12px;padding:18px 22px;
+                margin-top:8px;border:1px solid #DDE9E7">
+      <div style="font-size:11px;font-weight:700;letter-spacing:1.2px;
+                  text-transform:uppercase;color:#7A9E98;margin-bottom:10px">
+        📌 Methodology
+      </div>
+      <div style="font-size:12px;color:#556B67;line-height:1.9">
+        <b>Emergency Funds:</b> Total banking balances + liquid cash (latest Networth entry)
+        ÷ average monthly expenses over all tracked months.<br>
+        <b>Savings Ratio:</b> Average monthly net savings ÷ average monthly income.
+        Gross income (pre-CPF) would yield a slightly lower ratio.<br>
+        <b>TDSR / Non-Mortgage DSR:</b> Auto-detected from expense categories whose name
+        contains keywords: <em>Loan, Mortgage, Debt, Repayment, Installment</em>.<br>
+        <b>Guidelines</b> sourced from the Monetary Authority of Singapore (MAS) · 2026.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
