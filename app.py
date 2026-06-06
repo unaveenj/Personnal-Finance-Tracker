@@ -249,12 +249,13 @@ PALETTE = ["#004D40","#00695C","#00897B","#26A69A","#4DB6AC",
            "#80CBC4","#0D47A1","#1565C0","#E65100","#F57C00","#B71C1C"]
 
 def base_layout(**extra):
-    return dict(
+    base = dict(
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(family="DM Sans", color="#1C3A35"),
         margin=dict(l=0, r=0, t=24, b=0),
-        **extra
     )
+    base.update(extra)
+    return base
 
 def styled_yaxis(prefix="S$"):
     return dict(gridcolor="#EFF4F3", zeroline=False,
