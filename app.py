@@ -401,24 +401,50 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
                     impact=rise * 12,
                 ))
 
-    # ── 3. Redundant subscriptions ──
-    sub_cuts_list = [
-        ("ChatGPT", 28.59, "Duplicate of Claude — you already have the better tool"),
-        ("Spotify",  17.46, "YouTube Premium includes YouTube Music — direct overlap"),
+    # ── 3. Redundant subscriptions (data-driven from last 2 months) ──
+    _rsub_months = MONTHS[-2:] if len(MONTHS) >= 2 else MONTHS
+    _rsub_df = exp_all[
+        (exp_all["Category"] == "Subscriptions") &
+        (exp_all["Month"].isin(_rsub_months))
     ]
-    sub_total = sum(a for _, a, _ in sub_cuts_list)
-    detail    = "; ".join(f"{n} (S${a:.2f})" for n, a, _ in sub_cuts_list)
-    recs.append(dict(
-        priority="high",
-        title="Cancel 2 redundant subscriptions — zero lifestyle change",
-        body=(
-            f"{detail}. "
-            f"These overlap with tools you already pay for (Claude, YouTube Premium). "
-            f"Cancelling takes 10 minutes and frees up S${sub_total:.0f}/month immediately."
-        ),
-        action=f"Cancel today → save S${sub_total:.0f}/month = S${sub_total*12:.0f}/year",
-        impact=sub_total * 12,
-    ))
+    _sub_map = {}
+    for _, _r in _rsub_df.sort_values("Date").iterrows():
+        _sub_map[_r["Description"].strip().lower()] = (_r["Description"].strip(), _r["Amount"])
+
+    _sub_names = set(_sub_map.keys())
+    _has_claude  = "claude"  in _sub_names
+    _has_youtube = "youtube" in _sub_names
+    _has_netflix = "netflix" in _sub_names
+
+    _redundancy_rules = [
+        ("chatgpt", "You're paying for Claude — ChatGPT duplicates it"       if _has_claude  else "Consolidate AI tools"),
+        ("gemini",  "You're paying for Claude — Gemini duplicates it"        if _has_claude  else "Consolidate AI tools"),
+        ("spotify", "YouTube subscription already covers music streaming"     if _has_youtube else "Check if worth keeping"),
+        ("disney+", "You have Netflix — evaluate if both are worth keeping"   if _has_netflix else "Review streaming overlap"),
+    ]
+
+    sub_cuts_list = []
+    for _key, _reason in _redundancy_rules:
+        if _key in _sub_names:
+            _name, _amt = _sub_map[_key]
+            sub_cuts_list.append((_name, _amt, _reason))
+
+    if sub_cuts_list:
+        sub_total = sum(a for _, a, _ in sub_cuts_list)
+        n_cuts    = len(sub_cuts_list)
+        detail    = "; ".join(f"{n} (S${a:.0f})" for n, a, _ in sub_cuts_list)
+        reasons   = " ".join(f"<b>{n}:</b> {r}." for n, _, r in sub_cuts_list)
+        recs.append(dict(
+            priority="high",
+            title=f"Cancel {n_cuts} redundant subscription{'s' if n_cuts > 1 else ''} — zero lifestyle change",
+            body=(
+                f"{detail}. "
+                f"{reasons} "
+                f"Cancelling takes 10 minutes."
+            ),
+            action=f"Cancel today → save S${sub_total:.0f}/month (S${sub_total*12:.0f}/year)",
+            impact=sub_total * 12,
+        ))
 
     # ── 4. New large / unrecognised subscriptions ──
     all_subs = exp_all[exp_all["Category"] == "Subscriptions"].copy()
@@ -431,8 +457,9 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
         sub_freq["per_occ"] = sub_freq["total"] / sub_freq["count"]
         known_subs = {
             "chatgpt", "spotify", "claude", "netflix", "icloud", "youtube",
-            "hetzner vps", "ntuc membership", "gomo", "prime",
-            "avg antivirus", "newspaper",
+            "hetzner vps", "ntuc membership", "ntuc membeship", "gomo", "prime",
+            "avg antivirus", "newspaper", "surfshark", "gemini", "disney+",
+            "anytime fitness", "kodecloud",
         }
         new_big = sub_freq[
             (~sub_freq["Description"].str.lower().isin(known_subs)) &
@@ -768,17 +795,24 @@ if page == "📊  Dashboard":
 
     avg_inc  = inc_all["Amount"].sum() / N_MONTHS
     avg_exp  = exp_all["Amount"].sum() / N_MONTHS
-    sub_cuts = 82.62 + 28.59 + 17.46
-    food_mo  = exp_all[exp_all["Category"] == "Food"]["Amount"].sum() / N_MONTHS
+    food_mo  = exp_all[exp_all["Category"] == "Food & Dining"]["Amount"].sum() / N_MONTHS
     shop_mo  = exp_all[exp_all["Category"] == "Shopping"]["Amount"].sum() / N_MONTHS
-    opt_cut  = sub_cuts + food_mo * 0.15 + shop_mo * 0.15
+    # Compute sub_cuts from live data — only truly redundant monthly subs, not one-offs
+    _fc_months = MONTHS[-2:] if len(MONTHS) >= 2 else MONTHS
+    _fc_subs   = exp_all[(exp_all["Category"] == "Subscriptions") & (exp_all["Month"].isin(_fc_months))]
+    _fc_map    = {r["Description"].strip().lower(): r["Amount"] for _, r in _fc_subs.iterrows()}
+    _fc_disp   = {r["Description"].strip().lower(): r["Description"].strip() for _, r in _fc_subs.iterrows()}
+    _cut_keys  = {"chatgpt", "gemini", "spotify", "disney+"}
+    sub_cuts   = sum(v for k, v in _fc_map.items() if k in _cut_keys)
+    _cut_label = ", ".join(_fc_disp[k] for k in _cut_keys if k in _fc_map)
+    opt_cut    = sub_cuts + food_mo * 0.15 + shop_mo * 0.15
 
     f1, f2, f3 = st.columns(3)
     scenarios = [
         (f1, "Current Trajectory",  avg_exp,            "#004D40",
          "Maintaining current habits"),
         (f2, "Cut Redundant Subs",  avg_exp - sub_cuts, "#00897B",
-         f"Cancel ChatGPT, Spotify — S${sub_cuts:.0f}/month saved"),
+         f"Cancel {_cut_label} — S${sub_cuts:.0f}/month saved"),
         (f3, "Fully Optimised",     avg_exp - opt_cut,  "#1B5E20",
          f"Subs + 15% less Food & Shopping — S${opt_cut:.0f}/month saved"),
     ]
@@ -1127,20 +1161,20 @@ elif page == "💡  Insights":
     # ── Subscription audit ────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Subscription Audit</div>', unsafe_allow_html=True)
     subscriptions = [
-        ("Kodecloud",        101.80, "rev",  "New — cloud learning platform. Confirm monthly vs annual; worth it if actively used."),
-        ("Surfshark",        100.42, "rev",  "New VPN — confirm monthly vs annual billing. Justify if privacy is a priority."),
-        ("Anytime Fitness",   89.00, "keep", "Great habit. Verify 3×/week+ attendance."),
+        ("Anytime Fitness",   89.00, "keep", "Active May–Jun. Great habit — keep going."),
+        ("Surfshark VPN",    100.42, "keep", "One-time annual payment (~S$8/mo effective). Not a monthly cost."),
         ("AVG Antivirus",     82.62, "keep", "One-time annual payment — not a recurring monthly subscription."),
         ("Newspaper",         33.90, "rev",  "Only worth it if read daily. Free alternatives: CNA, ST (limited)."),
         ("Claude",            30.00, "keep", "Actively used — keep. Cancelling ChatGPT makes this the only AI sub."),
-        ("ChatGPT",           28.59, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo immediately."),
-        ("Netflix",           22.98, "rev",  "Review overlap with YouTube Premium for content."),
-        ("Spotify",           17.46, "cut",  "YouTube Premium includes YouTube Music. Cancel → save S$17/mo."),
-        ("YouTube Premium",   17.98, "keep", "Includes ad-free + YouTube Music. Replaces Spotify if cancelled."),
+        ("ChatGPT",           29.09, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo immediately."),
+        ("Netflix",           22.98, "rev",  "Active. Now overlaps with Disney+ — review if both are needed."),
+        ("Disney+",           18.98, "rev",  "New (Jun 2026). Evaluate if Netflix + Disney+ overlap too much."),
+        ("Spotify",           17.46, "rev",  "Not seen in Jun — may already be cancelled. Confirm status."),
+        ("YouTube Premium",   17.98, "keep", "Includes ad-free YouTube + YouTube Music."),
         ("iCloud",            13.98, "keep", "Essential for iOS backup. Good value at S$14/mo."),
         ("Hetzner VPS",       13.45, "keep", "Dev server — keep if actively used for projects."),
         ("NTUC Membership",    9.00, "keep", "Pays for itself in FairPrice discounts."),
-        ("Gomo (mobile)",      7.00, "keep", "Very affordable SIM plan. Keep."),
+        ("Gemini",             6.98, "cut",  "Duplicate AI with Claude. Cancel → save S$7/mo."),
         ("Prime",              4.99, "rev",  "S$5 — review if delivery / Prime Video is used regularly."),
     ]
     pill_class = {"cut":"pill-cut","keep":"pill-keep","rev":"pill-rev"}
