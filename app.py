@@ -159,6 +159,7 @@ html, body, [class*="css"] {
 .pill-cut  { background: #FEE2E2; color: #991B1B; }
 .pill-keep { background: #DCFCE7; color: #166534; }
 .pill-rev  { background: #FEF3C7; color: #92400E; }
+.pill-new  { background: #DBEAFE; color: #1E3A8A; }
 
 /* ── Table ── */
 [data-testid="stDataFrame"] { border-radius: 12px !important; overflow: hidden; }
@@ -582,6 +583,139 @@ def smart_recommendations(exp_df, inc_df, selected_month, top_n=None):
     recs.sort(key=lambda r: (order.get(r["priority"], 9), -r.get("impact", 0)))
 
     return recs[:top_n] if top_n else recs
+
+
+# ── SMART INSIGHTS HELPERS ────────────────────────────────────────────────────
+
+def _grade_letter(score):
+    """Convert 0-100 score to (letter, hex_color, bar_pct)."""
+    if score >= 85: return "A", "#166534", score
+    if score >= 70: return "B", "#0F766E", score
+    if score >= 50: return "C", "#92400E", score
+    if score >= 30: return "D", "#C2410C", score
+    return "F", "#991B1B", max(score, 5)
+
+
+def _grade_card_html(area, letter, color, verdict, bar_pct):
+    return f"""
+    <div style='background:white;border-radius:12px;padding:16px 12px;text-align:center;
+                box-shadow:0 1px 6px rgba(0,77,64,.07);height:100%'>
+      <div style='font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;
+                  color:#7A9E98;margin-bottom:8px'>{area}</div>
+      <div style='font-size:32px;font-weight:800;line-height:1;color:{color};
+                  margin-bottom:6px'>{letter}</div>
+      <div style='font-size:10px;color:#556B67;line-height:1.4;min-height:30px'>{verdict}</div>
+      <div style='height:4px;background:#EFF4F3;border-radius:2px;margin-top:10px'>
+        <div style='height:4px;background:{color};border-radius:2px;
+                    width:{min(bar_pct,100):.0f}%'></div>
+      </div>
+    </div>"""
+
+
+def _action_card_html(priority, area, title, detail, action_text, impact_annual=0):
+    colors = {
+        "high": ("#FEE2E2", "#991B1B", "#B71C1C"),
+        "med":  ("#FEF3C7", "#92400E", "#F59E0B"),
+        "good": ("#DCFCE7", "#166534", "#16A34A"),
+        "info": ("#DBEAFE", "#1E3A8A", "#1565C0"),
+    }
+    bg, text, border = colors.get(priority, ("#F3F4F6", "#374151", "#9CA3AF"))
+    labels = {"high": "HIGH", "med": "WATCH", "good": "GOOD", "info": "INFO"}
+    lbl = labels.get(priority, priority.upper())
+    if impact_annual > 0:
+        impact_html = f"<div style='font-size:11px;font-weight:700;color:#166534;white-space:nowrap;padding-top:2px'>S${impact_annual:,.0f}/yr</div>"
+    elif impact_annual < 0:
+        impact_html = f"<div style='font-size:11px;font-weight:700;color:#166534;white-space:nowrap;padding-top:2px'>+S${abs(impact_annual):,.0f}/yr vs peers</div>"
+    else:
+        impact_html = ""
+    return f"""
+    <div style='background:white;border-radius:12px;padding:14px 16px;margin-bottom:8px;
+                display:flex;align-items:flex-start;gap:14px;
+                box-shadow:0 1px 6px rgba(0,77,64,.07);border-left:3px solid {border}'>
+      <div style='padding-top:2px;flex-shrink:0'>
+        <span style='background:{bg};color:{text};font-size:9px;font-weight:700;
+                     letter-spacing:0.8px;padding:3px 8px;border-radius:6px;
+                     white-space:nowrap'>{lbl} · {area}</span>
+      </div>
+      <div style='flex:1'>
+        <div style='font-size:13px;font-weight:600;color:#1C3A35;margin-bottom:3px'>{title}</div>
+        <div style='font-size:11px;color:#556B67;line-height:1.6'>{detail}</div>
+        <div style='font-size:11px;font-weight:600;color:#004D40;margin-top:6px'>→ {action_text}</div>
+      </div>
+      {impact_html}
+    </div>"""
+
+
+def live_subscription_audit(exp_df, months_list):
+    """Pull subscriptions from live data, estimate monthly cost, flag redundancies."""
+    subs = exp_df[exp_df["Category"] == "Subscriptions"].copy()
+    if subs.empty:
+        return pd.DataFrame(columns=[
+            "name_display", "per_occurrence", "months_seen", "monthly_cost", "status", "reason"
+        ])
+
+    subs["name_key"] = subs["Description"].str.strip().str.lower()
+    name_display_map = (
+        subs.sort_values("Date").groupby("name_key")["Description"].last().str.strip()
+    )
+    agg = subs.groupby("name_key")["Amount"].agg(total="sum", count="count").reset_index()
+    agg["name_display"]   = agg["name_key"].map(name_display_map)
+    agg["per_occurrence"] = agg["total"] / agg["count"]
+    months_seen_s = subs.groupby("name_key")["Month"].nunique().rename("months_seen")
+    agg = agg.merge(months_seen_s, on="name_key")
+
+    n_mo = max(len(months_list), 1)
+    agg["monthly_cost"] = agg.apply(
+        lambda r: r["per_occurrence"] if r["months_seen"] >= n_mo * 0.7
+        else r["per_occurrence"] * r["months_seen"] / n_mo,
+        axis=1,
+    )
+    agg["is_new"] = (agg["months_seen"] == 1) & (n_mo > 1)
+
+    present = set(agg["name_key"].tolist())
+    def _has(kw): return any(kw in k for k in present)
+    has_claude  = _has("claude")
+    has_youtube = _has("youtube")
+    has_netflix = _has("netflix")
+
+    redundancy = {}
+    if has_claude:
+        for k in present:
+            if "chatgpt" in k: redundancy[k] = ("cut",  "Duplicate AI — Claude covers this")
+            if "gemini"  in k: redundancy[k] = ("cut",  "Duplicate AI — Claude covers this")
+    if has_youtube:
+        for k in present:
+            if "spotify" in k: redundancy[k] = ("cut",  "YouTube Premium already covers music")
+    if has_netflix:
+        for k in present:
+            if "disney"  in k: redundancy[k] = ("rev",  "Overlaps with Netflix — keep only one")
+
+    known_keep = {
+        "icloud", "claude", "anytime fitness", "ntuc", "hetzner",
+        "youtube", "prime", "surfshark", "avg",
+    }
+
+    statuses, reasons = [], []
+    for _, row in agg.iterrows():
+        k = row["name_key"]
+        if k in redundancy:
+            s, r = redundancy[k]
+        elif row["is_new"]:
+            s, r = "new", "First seen this month — monitor next month"
+        elif any(ke in k for ke in known_keep):
+            s, r = "keep", "Established, non-redundant"
+        else:
+            s, r = "rev", "Verify it's still actively used"
+        statuses.append(s)
+        reasons.append(r)
+
+    agg["status"] = statuses
+    agg["reason"] = reasons
+    return (
+        agg[["name_display", "per_occurrence", "months_seen", "monthly_cost", "status", "reason"]]
+        .sort_values("monthly_cost", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
@@ -1016,268 +1150,259 @@ elif page == "📈  Spending Analysis":
 # PAGE: INSIGHTS
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "💡  Insights":
-    st.markdown('<div class="page-title">Insights & Recommendations</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-title">Smart Insights</div>', unsafe_allow_html=True)
     st.markdown(
         f'<div class="page-subtitle">{selected_month} · '
-        f'Generated from your actual spending data</div>',
+        f'Graded from your actual spending data</div>',
         unsafe_allow_html=True
     )
 
-    all_inc  = inc_all["Amount"].sum()
-    all_exp  = exp_all["Amount"].sum()
-    all_rate = (all_inc - all_exp) / all_inc * 100 if all_inc > 0 else 0
-    sub_exp  = exp_all[exp_all["Category"]=="Subscriptions"]["Amount"].sum()
-    sub_n    = len(exp_all[exp_all["Category"]=="Subscriptions"])
+    # ── Data prep ─────────────────────────────────────────────────────────────
+    avg_inc_mo   = inc_all["Amount"].sum() / N_MONTHS
+    avg_exp_mo   = exp_all["Amount"].sum() / N_MONTHS
+    avg_rate     = (avg_inc_mo - avg_exp_mo) / avg_inc_mo * 100 if avg_inc_mo > 0 else 0
+    food_mo      = exp_all[exp_all["Category"] == "Food & Dining"]["Amount"].sum() / N_MONTHS
+    lifestyle_mo = exp_all[exp_all["Category"].isin(["Shopping", "Entertainment"])]["Amount"].sum() / N_MONTHS
+    transport_mo = exp_all[exp_all["Category"] == "Transport"]["Amount"].sum() / N_MONTHS
+    sub_audit_df = live_subscription_audit(exp_all, MONTHS)
+    sub_mo_total = sub_audit_df["monthly_cost"].sum() if not sub_audit_df.empty else 0
+    cut_subs     = sub_audit_df[sub_audit_df["status"] == "cut"] if not sub_audit_df.empty else pd.DataFrame()
+    n_redundant  = len(cut_subs)
 
-    # ── Dynamic month comparison ──────────────────────────────────────────────
+    rising_cats = []
+    if len(MONTHS) >= 3:
+        for cat in exp_all["Category"].unique():
+            vals = [
+                exp_all[(exp_all["Month"] == m) & (exp_all["Category"] == cat)]["Amount"].sum()
+                for m in MONTHS[-3:]
+            ]
+            if all(vals[i] < vals[i + 1] for i in range(2)) and vals[-1] > 30:
+                rising_cats.append((cat, vals))
+
+    # ── Grade each area ───────────────────────────────────────────────────────
+    # Savings Rate
+    if avg_rate >= 35:   sr_score = 90
+    elif avg_rate >= 25: sr_score = 78
+    elif avg_rate >= 15: sr_score = 58
+    elif avg_rate >= 5:  sr_score = 35
+    else:                sr_score = 10
+    sr_verdict = (
+        f"{avg_rate:.0f}% — excellent, well above SG avg" if avg_rate >= 30 else
+        f"{avg_rate:.0f}% — good, above SG average"       if avg_rate >= 20 else
+        f"{avg_rate:.0f}% — below 20% target"             if avg_rate >= 10 else
+        f"{avg_rate:.0f}% — low, review spending"
+    )
+    sr_letter, sr_color, _ = _grade_letter(sr_score)
+
+    # Subscriptions
+    if   n_redundant == 0 and sub_mo_total < 80:  sub_score = 90
+    elif n_redundant == 0 and sub_mo_total < 150:  sub_score = 72
+    elif n_redundant == 1:                          sub_score = 48
+    else:                                           sub_score = 28
+    sub_verdict = (
+        f"{n_redundant} redundant sub{'s' if n_redundant != 1 else ''} detected" if n_redundant > 0 else
+        f"S${sub_mo_total:.0f}/mo — lean and clean"    if sub_mo_total < 100 else
+        f"S${sub_mo_total:.0f}/mo — worth a review"
+    )
+    sub_letter, sub_color, _ = _grade_letter(sub_score)
+
+    # Spend Trend
+    n_rising = len(rising_cats)
+    if   n_rising == 0: trend_score = 90
+    elif n_rising == 1: trend_score = 70
+    elif n_rising == 2: trend_score = 48
+    else:               trend_score = 25
+    trend_verdict = (
+        "Spending stable across all categories"        if n_rising == 0 else
+        f"{rising_cats[0][0]} rising 3 months in a row" if n_rising == 1 else
+        f"{n_rising} categories rising consistently"
+    )
+    trend_letter, trend_color, _ = _grade_letter(trend_score)
+
+    # Food & Dining
+    if   food_mo < 300: food_score = 90
+    elif food_mo < 400: food_score = 72
+    elif food_mo < 500: food_score = 50
+    elif food_mo < 600: food_score = 30
+    else:               food_score = 10
+    food_verdict = (
+        f"S${food_mo:.0f}/mo — under SG low benchmark" if food_mo < 300 else
+        f"S${food_mo:.0f}/mo — within SG range"        if food_mo < 400 else
+        f"S${food_mo:.0f}/mo — above SG median"
+    )
+    food_letter, food_color, _ = _grade_letter(food_score)
+
+    # Lifestyle (Shopping + Entertainment)
+    if   lifestyle_mo < 200: ls_score = 90
+    elif lifestyle_mo < 400: ls_score = 72
+    elif lifestyle_mo < 600: ls_score = 50
+    elif lifestyle_mo < 800: ls_score = 30
+    else:                    ls_score = 10
+    ls_verdict = (
+        f"S${lifestyle_mo:.0f}/mo — well controlled" if lifestyle_mo < 300 else
+        f"S${lifestyle_mo:.0f}/mo — within range"    if lifestyle_mo < 500 else
+        f"S${lifestyle_mo:.0f}/mo — consider a ceiling"
+    )
+    ls_letter, ls_color, _ = _grade_letter(ls_score)
+
+    # ── Report Card ──────────────────────────────────────────────────────────
+    st.markdown('<div class="section-title">📊 Financial Report Card</div>', unsafe_allow_html=True)
+    gc1, gc2, gc3, gc4, gc5 = st.columns(5)
+    for col, (area, letter, color, verdict, score) in zip(
+        [gc1, gc2, gc3, gc4, gc5],
+        [
+            ("Savings Rate",  sr_letter,    sr_color,    sr_verdict,    sr_score),
+            ("Subscriptions", sub_letter,   sub_color,   sub_verdict,   sub_score),
+            ("Spend Trend",   trend_letter, trend_color, trend_verdict, trend_score),
+            ("Food & Dining", food_letter,  food_color,  food_verdict,  food_score),
+            ("Lifestyle",     ls_letter,    ls_color,    ls_verdict,    ls_score),
+        ],
+    ):
+        col.markdown(_grade_card_html(area, letter, color, verdict, score), unsafe_allow_html=True)
+
+    # ── Action Queue ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-title" style="margin-top:28px">🎯 Action Queue</div>',
+                unsafe_allow_html=True)
+
+    actions = []
+
+    # 1. Redundant subscriptions → HIGH
+    if not cut_subs.empty:
+        reasons_str = " ".join(
+            f"<b>{r['name_display']}</b>: {r['reason']}." for _, r in cut_subs.iterrows()
+        )
+        cut_names   = " + ".join(cut_subs["name_display"].tolist())
+        cut_total   = cut_subs["monthly_cost"].sum()
+        actions.append((
+            "high", "Subscriptions",
+            f"Cancel {len(cut_subs)} redundant subscription{'s' if len(cut_subs) > 1 else ''} — zero lifestyle change",
+            reasons_str + " Cancelling takes under 10 minutes.",
+            f"Cancel {cut_names} today",
+            cut_total * 12,
+        ))
+
+    # 2. Rising spend categories → MED
+    for cat, vals in rising_cats:
+        rise = vals[-1] - vals[0]
+        actions.append((
+            "med", "Spend Trend",
+            f"{cat} has risen 3 months in a row",
+            f"S${vals[0]:,.0f} → S${vals[1]:,.0f} → S${vals[2]:,.0f}. New habit, price increase, or scope creep?",
+            f"Set a monthly ceiling for {cat}",
+            rise * 12,
+        ))
+
+    # 3. Food over SG median → MED
+    if food_mo > 400:
+        saving = food_mo - 380
+        actions.append((
+            "med", "Food & Dining",
+            f"Food & Dining averaging S${food_mo:.0f}/mo — above SG median",
+            "SG median for a single person is S$300–400/mo. Travel months inflate this — tag travel meals as 'Travel' to see your true home baseline.",
+            "Set S$380/mo food budget; tag travel dining separately",
+            saving * 12,
+        ))
+
+    # 4. Over-budget vs average for the selected month → HIGH / MED
     if selected_month != "All Time":
-        p_inc, p_exp, p_label = prev_month_stats(selected_month)
-
-        if p_label:
-            st.markdown(
-                f'<div class="section-title">📅 {selected_month} vs {p_label}</div>',
-                unsafe_allow_html=True
-            )
-
-            curr_cats = exp[exp["Type"]=="Expense"].groupby("Category")["Amount"].sum()
-            prev_exp_df = df_all[df_all["Month"]==p_label]
-            prev_cats = prev_exp_df[prev_exp_df["Type"]=="Expense"].groupby("Category")["Amount"].sum()
-
-            all_cats_both = sorted(set(curr_cats.index) | set(prev_cats.index))
-            comparison = []
-            for cat in all_cats_both:
-                curr_amt = curr_cats.get(cat, 0)
-                prev_amt = prev_cats.get(cat, 0)
-                delta    = curr_amt - prev_amt
-                pct_chg  = (delta / prev_amt * 100) if prev_amt > 0 else (100 if curr_amt > 0 else 0)
-                comparison.append({
-                    "cat": cat, "curr": curr_amt,
-                    "prev": prev_amt, "delta": delta, "pct": pct_chg
-                })
-
-            comp_df = pd.DataFrame(comparison).sort_values("delta", ascending=False)
-            increases = comp_df[comp_df["delta"] > 5].head(4)
-            decreases = comp_df[comp_df["delta"] < -5].tail(4)
-
-            col_up, col_dn = st.columns(2)
-
-            with col_up:
-                st.markdown(
-                    f"<div style='font-size:12px;font-weight:600;color:#B71C1C;"
-                    f"letter-spacing:1px;margin-bottom:8px'>▲ INCREASED vs {p_label}</div>",
-                    unsafe_allow_html=True
-                )
-                if increases.empty:
-                    st.caption("No categories increased this month. 🎉")
-                else:
-                    for _, row in increases.iterrows():
-                        pct_disp = f"+{row['pct']:.0f}%" if row['prev'] > 0 else "NEW"
-                        bar_pct  = min(row["curr"] / max(comp_df["curr"].max(), 1) * 100, 100)
-                        st.markdown(
-                            f"<div style='margin-bottom:10px'>"
-                            f"<div style='display:flex;justify-content:space-between;"
-                            f"margin-bottom:4px'>"
-                            f"<span style='font-weight:500'>{row['cat']}</span>"
-                            f"<span><b>S${row['curr']:,.0f}</b>"
-                            f" <span class='mover-up'>{pct_disp}</span></span></div>"
-                            + prog_bar(bar_pct, "#B71C1C") +
-                            f"<div style='font-size:11px;color:#7A9E98;margin-top:2px'>"
-                            f"Was S${row['prev']:,.0f} in {p_label} · "
-                            f"S${abs(row['delta']):,.0f} more</div>"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
-
-            with col_dn:
-                st.markdown(
-                    f"<div style='font-size:12px;font-weight:600;color:#1B5E20;"
-                    f"letter-spacing:1px;margin-bottom:8px'>▼ DECREASED vs {p_label}</div>",
-                    unsafe_allow_html=True
-                )
-                if decreases.empty:
-                    st.caption("No categories decreased this month.")
-                else:
-                    for _, row in decreases.sort_values("delta").iterrows():
-                        pct_disp = f"{row['pct']:.0f}%"
-                        bar_pct  = min(row["curr"] / max(comp_df["curr"].max(), 1) * 100, 100)
-                        st.markdown(
-                            f"<div style='margin-bottom:10px'>"
-                            f"<div style='display:flex;justify-content:space-between;"
-                            f"margin-bottom:4px'>"
-                            f"<span style='font-weight:500'>{row['cat']}</span>"
-                            f"<span><b>S${row['curr']:,.0f}</b>"
-                            f" <span class='mover-down'>{pct_disp}</span></span></div>"
-                            + prog_bar(bar_pct, "#1B5E20") +
-                            f"<div style='font-size:11px;color:#7A9E98;margin-top:2px'>"
-                            f"Was S${row['prev']:,.0f} in {p_label} · "
-                            f"S${abs(row['delta']):,.0f} less</div>"
-                            f"</div>",
-                            unsafe_allow_html=True
-                        )
-
-            # Dynamic text recommendations based on movers
-            st.markdown('<div class="section-title">💬 What This Month Tells You</div>',
-                        unsafe_allow_html=True)
-
-            dynamic_recs = []
-            for _, row in increases.iterrows():
-                if row["pct"] > 50 and row["prev"] > 0:
-                    dynamic_recs.append((
-                        "high",
-                        f"{row['cat']} spending jumped {row['pct']:.0f}%",
-                        f"You spent S${row['curr']:,.0f} on {row['cat']} this month vs "
-                        f"S${row['prev']:,.0f} in {p_label} — a S${row['delta']:,.0f} increase. "
-                        f"{'One-off or a new habit? Tag it clearly so future months look accurate.' if row['curr'] > 200 else 'Small in absolute terms but worth noting the trend.'} ",
-                        f"📊 Review if this is recurring"
-                    ))
-                elif row["curr"] > 0 and row["prev"] == 0:
-                    dynamic_recs.append((
-                        "med",
-                        f"New spending in {row['cat']} this month",
-                        f"S${row['curr']:,.0f} in {row['cat']} — not present in {p_label}. "
-                        f"If this is a one-off, tag it so it doesn't distort your monthly average.",
-                        f"🏷️ Tag as one-off if applicable"
-                    ))
-
-            # Savings rate change recommendation
-            if p_inc and p_exp:
-                curr_rate = (total_inc - total_exp) / total_inc * 100 if total_inc > 0 else 0
-                prev_rate = (p_inc - p_exp) / p_inc * 100 if p_inc > 0 else 0
-                rate_diff = curr_rate - prev_rate
-                if rate_diff < -5:
-                    dynamic_recs.append((
-                        "high",
-                        f"Savings rate dropped {abs(rate_diff):.1f}pp vs {p_label}",
-                        f"Your savings rate fell from {prev_rate:.1f}% to {curr_rate:.1f}%. "
-                        f"The main driver: {increases.iloc[0]['cat'] if not increases.empty else 'higher overall spending'}. "
-                        f"If this was a one-off month, no action needed — but if the pattern repeats, revisit your budget targets.",
-                        f"🎯 Target: maintain above {prev_rate:.0f}%"
-                    ))
-                elif rate_diff > 5:
-                    dynamic_recs.append((
-                        "info",
-                        f"Savings rate improved {rate_diff:.1f}pp vs {p_label} 🎉",
-                        f"Great month — savings rate went from {prev_rate:.1f}% to {curr_rate:.1f}%. "
-                        f"{'Lower spending in ' + ', '.join(decreases['cat'].head(2).tolist()) + ' helped.' if not decreases.empty else ''} "
-                        f"Try to maintain this as your new baseline.",
-                        f"✅ New target: {curr_rate:.0f}%+ savings rate"
-                    ))
-
-            if not dynamic_recs:
-                dynamic_recs.append((
-                    "info",
-                    "Spending patterns are stable vs last month",
-                    f"No major category shifts vs {p_label}. "
-                    f"Your total expenses moved from S${p_exp:,.0f} to S${total_exp:,.0f}. "
-                    f"Keep tracking — patterns become clearer with more months of data.",
-                    "📈 Stay consistent"
+        cat_curr = exp.groupby("Category")["Amount"].sum().to_dict()
+        cat_avg  = (exp_all.groupby("Category")["Amount"].sum() / N_MONTHS).to_dict()
+        for cat, curr in sorted(cat_curr.items(), key=lambda x: -x[1]):
+            avg = cat_avg.get(cat, 0)
+            if avg > 0 and curr > avg * 1.3 and curr - avg > 50:
+                if any(cat == rc[0] for rc in rising_cats):
+                    continue
+                over = curr - avg
+                actions.append((
+                    "high" if over > 200 else "med", "This Month",
+                    f"{cat} is {(curr / avg - 1) * 100:.0f}% above your monthly average",
+                    f"S${curr:,.0f} in {selected_month} vs your S${avg:,.0f} average — S${over:,.0f} extra. One-off or new habit?",
+                    f"Review {cat} transactions for {selected_month}",
+                    over * 12,
                 ))
 
-            badge_style = {"high":"badge-high","med":"badge-med","info":"badge-info","good":"badge-good"}
-            badge_label_map = {"high":"HIGH IMPACT","med":"MEDIUM","info":"INFO","good":"GOOD NEWS"}
+    # 5. Bank yield optimisation → INFO
+    surplus_mo = avg_inc_mo * (avg_rate / 100)
+    if surplus_mo > 500:
+        actions.append((
+            "info", "Savings",
+            f"S${surplus_mo:,.0f}/mo surplus — is it earning 3%+?",
+            f"Your {avg_rate:.0f}% savings rate generates ~S${surplus_mo:,.0f}/mo. Large idle balances in standard accounts lose to inflation. "
+            "OCBC 360, Maribank (2.5%), CIMB FastSaver (~3%) all offer better rates when salary-credited.",
+            "Confirm idle cash is in a high-yield account",
+            0,
+        ))
 
-            for priority, title, body, saving in dynamic_recs:
-                st.markdown(f"""
-                <div class="insight-card">
-                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:2px">
-                    <span class="badge {badge_style[priority]}">{badge_label_map[priority]}</span>
-                    <span class="insight-title">{title}</span>
-                  </div>
-                  <div class="insight-body">{body}</div>
-                  <div class="insight-save">{saving}</div>
-                </div>""", unsafe_allow_html=True)
+    # 6. Transport good news → GOOD
+    if 0 < transport_mo < 100:
+        sg_mid = 150
+        actions.append((
+            "good", "Lifestyle",
+            f"Transport S${transport_mo:.0f}/mo — saving S${(sg_mid - transport_mo) * 12:.0f}/yr vs SG average",
+            f"SG benchmark is S$100–200/mo. Bus/MRT habit is paying off — no action needed.",
+            "No action needed — keep it up",
+            -((sg_mid - transport_mo) * 12),
+        ))
 
-        else:
-            st.info(f"No previous month data to compare against — this is your earliest recorded month.")
+    # 7. Strong savings rate good news → GOOD
+    if avg_rate >= 30:
+        actions.append((
+            "good", "Savings Rate",
+            f"{avg_rate:.0f}% savings rate — top quartile for Singapore",
+            f"SG median is 15–20%. At this pace you're accumulating S${surplus_mo * 12:,.0f}/yr.",
+            "Stay consistent — consider increasing IBKR DCA if surplus is idle",
+            0,
+        ))
 
-    # ── Full smart recommendations ────────────────────────────────────────────
-    st.markdown('<div class="section-title">💡 All Recommendations</div>', unsafe_allow_html=True)
-    st.caption("Prioritised by annual savings impact. Updated based on your real data.")
+    _priority_order = {"high": 0, "med": 1, "info": 2, "good": 3}
+    actions.sort(key=lambda a: (_priority_order.get(a[0], 9), -(a[5] if a[5] > 0 else 0)))
 
-    all_recs = smart_recommendations(exp, inc, selected_month)
-    for r in all_recs:
-        st.markdown(rec_card(r["priority"], r["title"], r["body"],
-                             r["action"], r["impact"]), unsafe_allow_html=True)
+    recoverable = sum(a[5] for a in actions if a[5] > 0)
+    if recoverable > 0:
+        st.caption(f"S${recoverable:,.0f}/yr available to recover from the actions below.")
 
-    # ── Financial health snapshot ─────────────────────────────────────────────
-    st.markdown('<div class="section-title">Financial Health Snapshot</div>', unsafe_allow_html=True)
-    h1, h2, h3, h4 = st.columns(4)
-    h1.metric("Overall Savings Rate",    f"{all_rate:.1f}%",               "⭐ Excellent")
-    h2.metric("Avg Monthly Income",      f"S${all_inc / N_MONTHS:,.0f}",   "Stable")
-    h3.metric("Subscription Spend",      f"S${sub_exp:,.0f}",              f"{sub_n} logged")
-    h4.metric("Monthly Expense Average", f"S${all_exp / N_MONTHS:,.0f}",   "Tracked period")
-
-    # ── Subscription audit ────────────────────────────────────────────────────
-    st.markdown('<div class="section-title">Subscription Audit</div>', unsafe_allow_html=True)
-    subscriptions = [
-        ("Anytime Fitness",   89.00, "keep", "Active May–Jun. Great habit — keep going."),
-        ("Surfshark VPN",    100.42, "keep", "One-time annual payment (~S$8/mo effective). Not a monthly cost."),
-        ("AVG Antivirus",     82.62, "keep", "One-time annual payment — not a recurring monthly subscription."),
-        ("Newspaper",         33.90, "rev",  "Only worth it if read daily. Free alternatives: CNA, ST (limited)."),
-        ("Claude",            30.00, "keep", "Actively used — keep. Cancelling ChatGPT makes this the only AI sub."),
-        ("ChatGPT",           29.09, "cut",  "Duplicate AI with Claude. Cancel → save S$29/mo immediately."),
-        ("Netflix",           22.98, "rev",  "Active. Now overlaps with Disney+ — review if both are needed."),
-        ("Disney+",           18.98, "rev",  "New (Jun 2026). Evaluate if Netflix + Disney+ overlap too much."),
-        ("Spotify",           17.46, "rev",  "Not seen in Jun — may already be cancelled. Confirm status."),
-        ("YouTube Premium",   17.98, "keep", "Includes ad-free YouTube + YouTube Music."),
-        ("iCloud",            13.98, "keep", "Essential for iOS backup. Good value at S$14/mo."),
-        ("Hetzner VPS",       13.45, "keep", "Dev server — keep if actively used for projects."),
-        ("NTUC Membership",    9.00, "keep", "Pays for itself in FairPrice discounts."),
-        ("Gemini",             6.98, "cut",  "Duplicate AI with Claude. Cancel → save S$7/mo."),
-        ("Prime",              4.99, "rev",  "S$5 — review if delivery / Prime Video is used regularly."),
-    ]
-    pill_class = {"cut":"pill-cut","keep":"pill-keep","rev":"pill-rev"}
-    pill_label = {"cut":"❌ Cut","keep":"✅ Keep","rev":"🟡 Review"}
-    potential_save = sum(amt for _, amt, s, _ in subscriptions if s == "cut")
-
-    hdr = st.columns([3, 1, 1, 4])
-    for col, lbl in zip(hdr, ["Subscription","S$/mo","Action","Reason"]):
-        col.markdown(small_label(lbl), unsafe_allow_html=True)
-    st.markdown("<hr style='border-color:#DDE9E7;margin:4px 0 8px'>", unsafe_allow_html=True)
-
-    for name, amt, status, reason in subscriptions:
-        c0, c1, c2, c3 = st.columns([3, 1, 1, 4])
-        c0.markdown(f"**{name}**")
-        c1.markdown(f"S${amt:.2f}")
-        c2.markdown(
-            f'<span class="pill {pill_class[status]}">{pill_label[status]}</span>',
-            unsafe_allow_html=True
+    for priority, area, title, detail, action_text, impact in actions:
+        st.markdown(
+            _action_card_html(priority, area, title, detail, action_text, impact),
+            unsafe_allow_html=True,
         )
-        c3.caption(reason)
 
-    st.success(
-        f"💡 Potential saving: **S${potential_save:.0f}/month** = "
-        f"**S${potential_save * 12:.0f}/year** by cutting redundant subscriptions only."
-    )
+    # ── Subscription Audit (live) ─────────────────────────────────────────────
+    st.markdown('<div class="section-title" style="margin-top:28px">🔍 Subscription Audit</div>',
+                unsafe_allow_html=True)
+    st.caption("Live from your transactions — pulled from the Subscriptions category in your sheet.")
 
-    # ── SG Benchmarks ─────────────────────────────────────────────────────────
-    st.markdown('<div class="section-title">Your Spending vs SG Benchmarks</div>', unsafe_allow_html=True)
+    if sub_audit_df.empty:
+        st.info("No subscription transactions found in your data.")
+    else:
+        pill_cls = {"cut": "pill-cut", "keep": "pill-keep", "rev": "pill-rev", "new": "pill-new"}
+        pill_lbl = {"cut": "❌ Cut", "keep": "✅ Keep", "rev": "🟡 Review", "new": "🆕 New"}
 
-    def m_avg(cat):
-        return exp_all[exp_all["Category"]==cat]["Amount"].sum() / N_MONTHS
+        hdr = st.columns([3, 1, 1, 1, 4])
+        for col, lbl in zip(hdr, ["Subscription", "S$/occurrence", "Months seen", "Action", "Reason"]):
+            col.markdown(small_label(lbl), unsafe_allow_html=True)
+        st.markdown("<hr style='border-color:#DDE9E7;margin:4px 0 8px'>", unsafe_allow_html=True)
 
-    benchmarks = [
-        ("Food & Dining",  m_avg("Food & Dining"),  300, 400, "SG median for a single person; travel months inflate this"),
-        ("Groceries",      m_avg("Groceries"),       150, 250, "Low — you dine out more than cook at home"),
-        ("Transport",      m_avg("Transport"),       100, 200, "Very low — mostly bus/MRT. Excellent."),
-        ("Subscriptions",  sub_exp / N_MONTHS,        50, 120, "Above typical range — audit the new additions"),
-        ("Shopping",       m_avg("Shopping"),        200, 400, "Mix of everyday + KL travel shopping"),
-        ("Entertainment",  m_avg("Entertainment"),    50, 150, "Pokemon cards + movies — worth capping"),
-    ]
+        for _, row in sub_audit_df.iterrows():
+            c0, c1, c2, c3, c4 = st.columns([3, 1, 1, 1, 4])
+            c0.markdown(f"**{row['name_display']}**")
+            c1.markdown(f"S${row['per_occurrence']:.2f}")
+            c2.markdown(f"{int(row['months_seen'])}")
+            status = row["status"]
+            pill_c = pill_cls.get(status, "pill-rev")
+            pill_t = pill_lbl.get(status, "🟡 Review")
+            c3.markdown(
+                f'<span class="pill {pill_c}">{pill_t}</span>',
+                unsafe_allow_html=True,
+            )
+            c4.caption(row["reason"])
 
-    hdr2 = st.columns([2, 1, 1, 1, 3])
-    for col, lbl in zip(hdr2, ["Category","Your avg/mo","SG Low","SG High","Note"]):
-        col.markdown(small_label(lbl), unsafe_allow_html=True)
-    st.markdown("<hr style='border-color:#DDE9E7;margin:4px 0 8px'>", unsafe_allow_html=True)
-
-    for cat, your, lo, hi, note in benchmarks:
-        status = "🟢" if your <= hi else "🔴" if your > hi * 1.3 else "🟡"
-        c0, c1, c2, c3, c4 = st.columns([2, 1, 1, 1, 3])
-        c0.markdown(f"**{cat}**")
-        c1.markdown(f"**S${your:,.0f}**")
-        c2.markdown(f"S${lo:,}")
-        c3.markdown(f"S${hi:,}")
-        c4.caption(f"{status} {note}")
+        cut_total = sub_audit_df[sub_audit_df["status"] == "cut"]["monthly_cost"].sum()
+        if cut_total > 0:
+            st.success(
+                f"💡 Cancel redundant subscriptions → save **S${cut_total:.0f}/month** "
+                f"(**S${cut_total * 12:.0f}/year**) with zero lifestyle change."
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
