@@ -249,6 +249,34 @@ N_MONTHS = max(len(MONTHS), 1)
 PALETTE = ["#004D40","#00695C","#00897B","#26A69A","#4DB6AC",
            "#80CBC4","#0D47A1","#1565C0","#E65100","#F57C00","#B71C1C"]
 
+CATEGORY_GROUPS = {
+    "Food & Dining":  "Food",
+    "Groceries":      "Food",
+    "Transport":      "Transport & Travel",
+    "Travel":         "Transport & Travel",
+    "Shopping":       "Shopping",
+    "Entertainment":  "Shopping",
+    "Gifts":          "Shopping",
+    "Bills & Utilities": "Bills",
+    "Subscriptions":  "Bills",
+    "Health & Fitness": "Health & Education",
+    "Education":      "Health & Education",
+    "Family":         "Family & Giving",
+    "Donations":      "Family & Giving",
+    "Misc":           "Other",
+    "Refunds":        "Other",
+}
+
+GROUP_COLORS = {
+    "Food":                "#2E7D32",
+    "Transport & Travel":  "#1565C0",
+    "Shopping":            "#E65100",
+    "Bills":               "#6A1B9A",
+    "Health & Education":  "#AD1457",
+    "Family & Giving":     "#F9A825",
+    "Other":               "#546E7A",
+}
+
 def base_layout(**extra):
     base = dict(
         plot_bgcolor="white", paper_bgcolor="white",
@@ -711,16 +739,36 @@ if page == "📊  Dashboard":
 
     with col_r:
         st.markdown('<div class="section-title">Expenses by Category</div>', unsafe_allow_html=True)
-        cat_data = exp.groupby("Category")["Amount"].sum().sort_values(ascending=False).reset_index()
-        cat_data = cat_data[cat_data["Amount"] > 0]
-        fig2 = px.pie(cat_data, values="Amount", names="Category",
-                      color_discrete_sequence=PALETTE, hole=0.52)
+        raw = exp.groupby("Category")["Amount"].sum()
+        raw = raw[raw > 0]
+        raw_df = raw.reset_index()
+        raw_df["Group"] = raw_df["Category"].map(CATEGORY_GROUPS).fillna("Other")
+        group_totals = raw_df.groupby("Group")["Amount"].sum().reset_index()
+        breakdowns = (
+            raw_df.sort_values("Amount", ascending=False)
+            .groupby("Group")
+            .apply(lambda g: "<br>".join(
+                f"  {r['Category']}: S${r['Amount']:,.0f}" for _, r in g.iterrows()
+            ))
+            .reset_index(name="Breakdown")
+        )
+        group_totals = group_totals.merge(breakdowns, on="Group")
+        group_totals = group_totals.sort_values("Amount", ascending=False)
+        group_totals["Color"] = group_totals["Group"].map(GROUP_COLORS).fillna("#546E7A")
+        fig2 = go.Figure(go.Pie(
+            labels=group_totals["Group"],
+            values=group_totals["Amount"],
+            customdata=group_totals["Breakdown"],
+            marker_colors=group_totals["Color"],
+            hole=0.52,
+            textposition="inside",
+            textinfo="percent",
+            hovertemplate="<b>%{label}</b>  S$%{value:,.0f}<br><br>%{customdata}<extra></extra>",
+        ))
         fig2.update_layout(
             **base_layout(height=300),
             legend=dict(orientation="v", x=1.02, y=0.5, font_size=11),
         )
-        fig2.update_traces(textposition="inside", textinfo="percent",
-                           hovertemplate="<b>%{label}</b><br>S$%{value:,.2f}<extra></extra>")
         st.plotly_chart(fig2, use_container_width=True)
 
     # ── Row 3: Weekly trend + Top 5 ──────────────────────────────────────────
