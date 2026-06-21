@@ -674,21 +674,21 @@ def live_subscription_audit(exp_df, months_list):
 
     present = set(agg["name_key"].tolist())
     def _has(kw): return any(kw in k for k in present)
-    has_claude  = _has("claude")
     has_youtube = _has("youtube")
     has_netflix = _has("netflix")
 
+    # AI tools are professional expenses — flag for awareness, not elimination
+    ai_tools = {"claude", "chatgpt", "gemini", "copilot", "perplexity", "midjourney"}
+
     redundancy = {}
-    if has_claude:
-        for k in present:
-            if "chatgpt" in k: redundancy[k] = ("cut",  "Duplicate AI — Claude covers this")
-            if "gemini"  in k: redundancy[k] = ("cut",  "Duplicate AI — Claude covers this")
     if has_youtube:
         for k in present:
-            if "spotify" in k: redundancy[k] = ("cut",  "YouTube Premium already covers music")
+            if "spotify" in k:
+                redundancy[k] = ("cut", "YouTube Premium already covers music streaming")
     if has_netflix:
         for k in present:
-            if "disney"  in k: redundancy[k] = ("rev",  "Overlaps with Netflix — keep only one")
+            if "disney" in k:
+                redundancy[k] = ("rev", "Overlaps with Netflix — keep the one you watch more")
 
     known_keep = {
         "icloud", "claude", "anytime fitness", "ntuc", "hetzner",
@@ -700,6 +700,8 @@ def live_subscription_audit(exp_df, months_list):
         k = row["name_key"]
         if k in redundancy:
             s, r = redundancy[k]
+        elif any(ai in k for ai in ai_tools):
+            s, r = "rev", "AI tool — review which you actively used this month"
         elif row["is_new"]:
             s, r = "new", "First seen this month — monitor next month"
         elif any(ke in k for ke in known_keep):
@@ -712,7 +714,7 @@ def live_subscription_audit(exp_df, months_list):
     agg["status"] = statuses
     agg["reason"] = reasons
     return (
-        agg[["name_display", "per_occurrence", "months_seen", "monthly_cost", "status", "reason"]]
+        agg[["name_key", "name_display", "per_occurrence", "months_seen", "monthly_cost", "status", "reason"]]
         .sort_values("monthly_cost", ascending=False)
         .reset_index(drop=True)
     )
@@ -1166,8 +1168,8 @@ elif page == "💡  Insights":
     transport_mo = exp_all[exp_all["Category"] == "Transport"]["Amount"].sum() / N_MONTHS
     sub_audit_df = live_subscription_audit(exp_all, MONTHS)
     sub_mo_total = sub_audit_df["monthly_cost"].sum() if not sub_audit_df.empty else 0
-    cut_subs     = sub_audit_df[sub_audit_df["status"] == "cut"] if not sub_audit_df.empty else pd.DataFrame()
-    n_redundant  = len(cut_subs)
+    cut_subs    = sub_audit_df[sub_audit_df["status"] == "cut"] if not sub_audit_df.empty else pd.DataFrame()
+    n_redundant = len(cut_subs)  # only counts genuine non-AI duplicates (e.g. Spotify + YouTube)
 
     rising_cats = []
     if len(MONTHS) >= 3:
@@ -1281,76 +1283,120 @@ elif page == "💡  Insights":
             cut_total * 12,
         ))
 
-    # 2. Rising spend categories → MED
+    # Categories to skip from trend/budget flagging — intentional spend, not lifestyle inflation
+    _intentional_cats = {"Travel", "Food & Dining", "Groceries", "Subscriptions"}
+
+    # 2. Rising spend — skip intentional categories and Travel
     for cat, vals in rising_cats:
+        if cat in _intentional_cats:
+            continue
         rise = vals[-1] - vals[0]
         actions.append((
             "med", "Spend Trend",
             f"{cat} has risen 3 months in a row",
-            f"S${vals[0]:,.0f} → S${vals[1]:,.0f} → S${vals[2]:,.0f}. New habit, price increase, or scope creep?",
-            f"Set a monthly ceiling for {cat}",
+            f"S${vals[0]:,.0f} → S${vals[1]:,.0f} → S${vals[2]:,.0f}. "
+            f"Worth checking whether this is a conscious choice or gradual drift.",
+            f"Decide on a comfortable monthly ceiling for {cat}",
             rise * 12,
         ))
 
-    # 3. Food over SG median → MED
-    if food_mo > 400:
-        saving = food_mo - 380
+    # 3. Food & Dining — data quality tip, not a cut suggestion
+    travel_mo = exp_all[exp_all["Category"] == "Travel"]["Amount"].sum() / N_MONTHS
+    if food_mo > 350 and travel_mo > 100:
         actions.append((
-            "med", "Food & Dining",
-            f"Food & Dining averaging S${food_mo:.0f}/mo — above SG median",
-            "SG median for a single person is S$300–400/mo. Travel months inflate this — tag travel meals as 'Travel' to see your true home baseline.",
-            "Set S$380/mo food budget; tag travel dining separately",
-            saving * 12,
+            "info", "Food & Dining",
+            f"Travel months inflate your food average to S${food_mo:.0f}/mo",
+            f"You spend ~S${travel_mo:.0f}/mo on Travel on average — dining during trips likely sits in "
+            f"Food & Dining too. Tag restaurant meals during holidays as 'Travel' for a cleaner home baseline.",
+            "Tag travel dining as 'Travel' in your sheet going forward",
+            0,
         ))
 
-    # 4. Over-budget vs average for the selected month → HIGH / MED
+    # 4. Over-budget vs average for selected month — skip intentional categories
     if selected_month != "All Time":
         cat_curr = exp.groupby("Category")["Amount"].sum().to_dict()
         cat_avg  = (exp_all.groupby("Category")["Amount"].sum() / N_MONTHS).to_dict()
         for cat, curr in sorted(cat_curr.items(), key=lambda x: -x[1]):
+            if cat in _intentional_cats:
+                continue
             avg = cat_avg.get(cat, 0)
-            if avg > 0 and curr > avg * 1.3 and curr - avg > 50:
+            if avg > 0 and curr > avg * 1.35 and curr - avg > 80:
                 if any(cat == rc[0] for rc in rising_cats):
                     continue
                 over = curr - avg
                 actions.append((
-                    "high" if over > 200 else "med", "This Month",
-                    f"{cat} is {(curr / avg - 1) * 100:.0f}% above your monthly average",
-                    f"S${curr:,.0f} in {selected_month} vs your S${avg:,.0f} average — S${over:,.0f} extra. One-off or new habit?",
-                    f"Review {cat} transactions for {selected_month}",
+                    "high" if over > 250 else "med", "This Month",
+                    f"{cat} is {(curr / avg - 1) * 100:.0f}% above your usual spend",
+                    f"S${curr:,.0f} in {selected_month} vs your S${avg:,.0f} average. "
+                    f"S${over:,.0f} extra — one-off, or starting to drift?",
+                    f"Check {cat} transactions for {selected_month} and decide if it needs a cap",
                     over * 12,
                 ))
 
-    # 5. Bank yield optimisation → INFO
-    surplus_mo = avg_inc_mo * (avg_rate / 100)
-    if surplus_mo > 500:
+    # 5. AI subscription spend awareness (not a cut — professional context)
+    ai_subs = sub_audit_df[
+        sub_audit_df["name_key"].apply(
+            lambda k: any(ai in k for ai in {"claude", "chatgpt", "gemini", "copilot", "perplexity", "midjourney"})
+        )
+    ] if not sub_audit_df.empty and "name_key" in sub_audit_df.columns else pd.DataFrame()
+    ai_sub_total = ai_subs["monthly_cost"].sum() if not ai_subs.empty else 0
+    if ai_sub_total > 50:
         actions.append((
-            "info", "Savings",
-            f"S${surplus_mo:,.0f}/mo surplus — is it earning 3%+?",
-            f"Your {avg_rate:.0f}% savings rate generates ~S${surplus_mo:,.0f}/mo. Large idle balances in standard accounts lose to inflation. "
-            "OCBC 360, Maribank (2.5%), CIMB FastSaver (~3%) all offer better rates when salary-credited.",
-            "Confirm idle cash is in a high-yield account",
+            "info", "Subscriptions",
+            f"S${ai_sub_total:.0f}/mo on AI tools — legitimate, but audit usage monthly",
+            f"You're running {len(ai_subs)} AI subscription{'s' if len(ai_subs) > 1 else ''} "
+            f"({', '.join(ai_subs['name_display'].tolist())}). As an AI professional these are tools, not luxuries. "
+            f"Still worth checking each month: anything you haven't opened in 30 days is worth pausing.",
+            "Monthly habit: check which AI tools you actually used this month",
             0,
         ))
 
-    # 6. Transport good news → GOOD
+    # 6. Bank yield optimisation → INFO
+    surplus_mo = avg_inc_mo * (avg_rate / 100)
+    if surplus_mo > 500:
+        est_yield_gain = surplus_mo * 12 * 0.025
+        actions.append((
+            "info", "Savings",
+            f"S${surplus_mo:,.0f}/mo surplus — make sure it's earning 2.5–4%",
+            f"Your {avg_rate:.0f}% savings rate is strong. Idle cash in a standard account loses ~2% p.a. to inflation. "
+            f"Maribank (2.5%), CIMB FastSaver (~3%), OCBC 360 (up to 4.65% with salary credit + spend) "
+            f"could add ~S${est_yield_gain:,.0f}/yr on your current surplus.",
+            "Confirm idle cash is parked in a high-yield account, not a current account",
+            est_yield_gain,
+        ))
+
+    # 7. Travel planning tip → INFO (travel is intentional, optimise it)
+    if travel_mo > 50:
+        actions.append((
+            "info", "Travel",
+            f"S${travel_mo:.0f}/mo average on travel — optimise, don't cut",
+            f"Holidays are planned spend, not lifestyle inflation. You can get S$200–500 back per trip "
+            f"by routing flights and hotels through a miles card (DBS Altitude, Citi PremierMiles). "
+            f"At S${travel_mo:.0f}/mo spend, a 1.2-mile-per-dollar card earns ~{travel_mo * 1.2 * 12:,.0f} miles/yr.",
+            "Consider a travel miles card for flight and hotel bookings",
+            0,
+        ))
+
+    # 8. Transport good news → GOOD
     if 0 < transport_mo < 100:
         sg_mid = 150
         actions.append((
             "good", "Lifestyle",
             f"Transport S${transport_mo:.0f}/mo — saving S${(sg_mid - transport_mo) * 12:.0f}/yr vs SG average",
-            f"SG benchmark is S$100–200/mo. Bus/MRT habit is paying off — no action needed.",
+            "SG benchmark is S$100–200/mo. Sticking to bus/MRT is one of the highest-ROI habits you can have in Singapore.",
             "No action needed — keep it up",
             -((sg_mid - transport_mo) * 12),
         ))
 
-    # 7. Strong savings rate good news → GOOD
+    # 9. Strong savings rate → GOOD
     if avg_rate >= 30:
         actions.append((
             "good", "Savings Rate",
             f"{avg_rate:.0f}% savings rate — top quartile for Singapore",
-            f"SG median is 15–20%. At this pace you're accumulating S${surplus_mo * 12:,.0f}/yr.",
-            "Stay consistent — consider increasing IBKR DCA if surplus is idle",
+            f"SG median is 15–20%. At this pace you're building S${surplus_mo * 12:,.0f}/yr. "
+            f"Compounded at 7% p.a. (VWRA), S${surplus_mo:,.0f}/mo for 10 years grows to "
+            f"S${surplus_mo * 12 * ((1.07**10 - 1) / 0.07):,.0f}.",
+            "Stay consistent — ensure surplus flows to IBKR/CPF, not idle cash",
             0,
         ))
 
