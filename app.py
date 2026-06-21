@@ -2,14 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import streamlit.components.v1 as components
-from plotnine import (
-    ggplot, aes, geom_col, geom_line, geom_point, geom_hline, annotate,
-    theme_minimal, theme, element_text, element_blank, element_rect, element_line,
-    scale_fill_manual, scale_color_manual, scale_fill_gradient, guides,
-    position_dodge, labs,
-)
-from ninejs import interactive, to_html, css as nj_css, javascript as nj_js
 
 st.set_page_config(
     page_title="Naveen's Finance",
@@ -286,70 +278,6 @@ GROUP_COLORS = {
     "Family & Giving":     "#F9A825",
     "Other":               "#546E7A",
 }
-
-# ── NINEJS / PLOTNINE HELPERS ─────────────────────────────────────────────────
-_NJ_CSS = """
-.tooltip {
-    background: #1C3A35; color: #fff;
-    border-radius: 8px; padding: 8px 13px;
-    font-family: 'DM Sans', sans-serif;
-    font-size: 12px; line-height: 1.65;
-    box-shadow: 0 4px 18px rgba(0,0,0,0.22);
-    pointer-events: none;
-}
-svg {
-    width: 100% !important;
-    height: auto !important;
-    display: block;
-    max-width: 100%;
-}
-"""
-
-_NJ_JS = """
-(function() {
-    function fixSvg() {
-        document.querySelectorAll('svg').forEach(function(s) {
-            var w = parseFloat(s.getAttribute('width'));
-            var h = parseFloat(s.getAttribute('height'));
-            if (w && h && !s.getAttribute('viewBox')) {
-                s.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
-            }
-            s.removeAttribute('width');
-            s.removeAttribute('height');
-            s.style.width = '100%';
-            s.style.height = 'auto';
-        });
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', fixSvg);
-    } else {
-        fixSvg();
-    }
-    setTimeout(fixSvg, 200);
-})();
-"""
-
-def _ft():
-    return (
-        theme_minimal()
-        + theme(
-            text=element_text(family="DM Sans", color="#1C3A35"),
-            plot_background=element_rect(fill="white", color="white"),
-            panel_background=element_rect(fill="white", color="white"),
-            panel_grid_major_y=element_line(color="#EFF4F3", size=0.5),
-            panel_grid_major_x=element_blank(),
-            panel_grid_minor=element_blank(),
-            axis_text=element_text(size=9, color="#7A9E98"),
-            axis_title=element_blank(),
-            legend_title=element_blank(),
-            legend_text=element_text(size=10, color="#556B67"),
-        )
-    )
-
-def _nj(gg, height=360):
-    html = interactive(gg) + nj_css(_NJ_CSS) + nj_js(_NJ_JS) + to_html()
-    components.html(html, height=height, scrolling=False)
-
 
 def base_layout(**extra):
     base = dict(
@@ -929,48 +857,22 @@ if page == "📊  Dashboard":
 
     with col_l:
         st.markdown('<div class="section-title">Monthly Income vs Expenses</div>', unsafe_allow_html=True)
-        m_w = (
-            df_all.groupby(["Month", "Type"])["Amount"].sum()
-            .unstack(fill_value=0).reset_index()
+        monthly = df_all.groupby(["Month", "Type"])["Amount"].sum().reset_index()
+        monthly["_s"] = pd.to_datetime(monthly["Month"], format="%b %Y")
+        monthly = monthly.sort_values("_s")
+        fig = go.Figure()
+        fig.add_bar(x=monthly[monthly["Type"]=="Income"]["Month"],
+                    y=monthly[monthly["Type"]=="Income"]["Amount"],
+                    name="Income", marker_color="#1B5E20", marker_line_width=0, opacity=0.9)
+        fig.add_bar(x=monthly[monthly["Type"]=="Expense"]["Month"],
+                    y=monthly[monthly["Type"]=="Expense"]["Amount"],
+                    name="Expenses", marker_color="#B71C1C", marker_line_width=0, opacity=0.9)
+        fig.update_layout(
+            **base_layout(height=300, barmode="group"),
+            yaxis=styled_yaxis(), xaxis=styled_xaxis(),
+            legend=dict(orientation="h", y=1.08, x=0, font_size=12),
         )
-        m_w["_s"] = pd.to_datetime(m_w["Month"], format="%b %Y")
-        m_w = m_w.sort_values("_s")
-        for _c in ["Income", "Expense"]:
-            if _c not in m_w.columns: m_w[_c] = 0
-        m_w["Saved"] = m_w["Income"] - m_w["Expense"]
-        m_w["Rate"]  = (m_w["Saved"] / m_w["Income"].replace(0, 1) * 100).round(1)
-        _mo = m_w["Month"].tolist()
-
-        _inc = m_w[["Month","Income","Saved","Rate"]].copy().rename(columns={"Income":"Amount"})
-        _inc["Type"] = "Income"
-        _inc["tip"]  = _inc.apply(
-            lambda r: (
-                f"<b>{r['Month']}</b><br>"
-                f"Income: S${r['Amount']:,.0f}<br>"
-                f"Saved: S${r['Saved']:,.0f} · {r['Rate']:.0f}% savings rate"
-            ), axis=1
-        )
-        _exp = m_w[["Month","Expense","Saved","Rate"]].copy().rename(columns={"Expense":"Amount"})
-        _exp["Type"] = "Expense"
-        _exp["tip"]  = _exp.apply(
-            lambda r: (
-                f"<b>{r['Month']}</b><br>"
-                f"Expenses: S${r['Amount']:,.0f}<br>"
-                f"Saved: S${r['Saved']:,.0f} · {r['Rate']:.0f}% savings rate"
-            ), axis=1
-        )
-        m_nj = pd.concat([_inc, _exp], ignore_index=True)
-        m_nj["Month"] = pd.Categorical(m_nj["Month"], categories=_mo, ordered=True)
-        m_nj["Type"]  = pd.Categorical(m_nj["Type"], categories=["Income","Expense"], ordered=True)
-
-        gg_m = (
-            ggplot(m_nj, aes("Month", "Amount", fill="Type", tooltip="tip", data_id="Month"))
-            + geom_col(position=position_dodge(width=0.9), width=0.8)
-            + scale_fill_manual(values={"Income":"#1B5E20","Expense":"#B71C1C"})
-            + _ft()
-            + theme(axis_text_x=element_text(angle=35, hjust=1, size=8))
-        )
-        _nj(gg_m, height=340)
+        st.plotly_chart(fig, use_container_width=True)
 
     with col_r:
         st.markdown('<div class="section-title">Expenses by Category</div>', unsafe_allow_html=True)
@@ -1023,30 +925,27 @@ if page == "📊  Dashboard":
         daily.columns = ["Date", "Amount"]
         daily["Label"] = pd.to_datetime(daily["Date"]).dt.strftime("%d %b")
 
-        avg_d    = daily["Amount"].mean()
-        _dcnt    = daily_src.groupby(daily_src["Date"].dt.date)["Amount"].count().reset_index()
-        _dcnt.columns = ["Date", "n"]
-        daily_nj = daily.merge(_dcnt, on="Date")
-        daily_nj["over"] = daily_nj["Amount"] > avg_d
-        daily_nj["tip"]  = daily_nj.apply(
-            lambda r: (
-                f"<b>{r['Label']}</b><br>"
-                f"S${r['Amount']:,.2f} · {r['n']} txn<br>"
-                f"{'▲' if r['over'] else '▼'} "
-                f"{abs((r['Amount']-avg_d)/avg_d*100):.0f}% vs S${avg_d:,.0f} avg"
-            ), axis=1
+        fig3 = go.Figure()
+        fig3.add_bar(
+            x=daily["Label"], y=daily["Amount"],
+            marker_color="#004D40", marker_line_width=0, opacity=0.75,
+            hovertemplate="<b>%{x}</b><br>S$%{y:,.2f}<extra></extra>",
         )
-        gg_d = (
-            ggplot(daily_nj, aes("Label", "Amount", fill="over", tooltip="tip"))
-            + geom_col(width=0.75)
-            + geom_hline(yintercept=avg_d, linetype="dashed", color="#E65100", size=0.7)
-            + annotate("text", x=len(daily_nj) - 0.3, y=avg_d * 1.06,
-                       label=f"Avg S${avg_d:,.0f}", size=8, color="#E65100", ha="right")
-            + scale_fill_manual(values={True: "#B71C1C", False: "#004D40"}, guide=None)
-            + _ft()
-            + theme(axis_text_x=element_text(angle=45, hjust=1, size=7))
+        # Average daily line
+        avg_d = daily["Amount"].mean()
+        fig3.add_hline(
+            y=avg_d, line_dash="dot", line_color="#E65100", line_width=1.5,
+            annotation_text=f"Avg S${avg_d:,.0f}",
+            annotation_position="top right",
+            annotation_font_size=11,
+            annotation_font_color="#E65100",
         )
-        _nj(gg_d, height=310)
+        fig3.update_layout(
+            **base_layout(height=250),
+            yaxis=styled_yaxis(), xaxis=styled_xaxis(),
+            bargap=0.25,
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
     with col_t:
         st.markdown('<div class="section-title">Top 5 Expenses</div>', unsafe_allow_html=True)
@@ -1123,41 +1022,20 @@ elif page == "📈  Spending Analysis":
         st.markdown('<div class="section-title">Category Breakdown</div>', unsafe_allow_html=True)
         cat_data = exp.groupby("Category")["Amount"].sum().sort_values().reset_index()
         cat_data = cat_data[cat_data["Amount"] > 0]
-        cat_data["pct"] = (cat_data["Amount"] / cat_data["Amount"].sum() * 100).round(1)
-        _cat_avg = (exp_all.groupby("Category")["Amount"].sum() / N_MONTHS).to_dict()
-        cat_data["avg_mo"] = cat_data["Category"].map(_cat_avg).fillna(0)
-        cat_data["vs_pct"] = (
-            (cat_data["Amount"] - cat_data["avg_mo"]) / cat_data["avg_mo"].replace(0, 1) * 100
-        ).round(1)
-        cat_data["tip"] = cat_data.apply(
-            lambda r: (
-                f"<b>{r['Category']}</b><br>"
-                f"S${r['Amount']:,.0f} · {r['pct']}% of total spend"
-                + (
-                    f"<br>Avg/mo: S${r['avg_mo']:,.0f} · "
-                    f"{'▲' if r['vs_pct']>0 else '▼'} {abs(r['vs_pct']):.0f}% vs avg"
-                    if r["avg_mo"] > 0 else ""
-                )
-            ), axis=1
+        cat_data["pct"]   = (cat_data["Amount"] / cat_data["Amount"].sum() * 100).round(1)
+        cat_data["label"] = cat_data.apply(lambda r: f"S${r['Amount']:,.0f}  ({r['pct']}%)", axis=1)
+        fig = px.bar(cat_data, x="Amount", y="Category", orientation="h",
+                     text="label", color="Amount",
+                     color_continuous_scale=[[0,"#B2DFDB"],[1,"#004D40"]])
+        fig.update_traces(textposition="outside", textfont_size=11, marker_line_width=0)
+        fig.update_layout(
+            **base_layout(height=max(300, len(cat_data) * 44)),
+            coloraxis_showscale=False, showlegend=False,
+            xaxis=dict(**styled_xaxis(), tickprefix="S$", title=""),
+            yaxis=dict(gridcolor="#EFF4F3", zeroline=False, title=""),
         )
-        cat_data["Category"] = pd.Categorical(
-            cat_data["Category"], categories=cat_data["Category"].tolist(), ordered=True
-        )
-        cat_data["tier"] = pd.cut(
-            cat_data["Amount"],
-            bins=3,
-            labels=["low", "mid", "high"],
-        ).astype(str)
-        gg_cat = (
-            ggplot(cat_data, aes(y="Category", x="Amount", fill="tier", tooltip="tip"))
-            + geom_col(width=0.72)
-            + scale_fill_manual(
-                values={"low": "#B2DFDB", "mid": "#26A69A", "high": "#004D40"},
-                guide=None,
-            )
-            + _ft()
-        )
-        _nj(gg_cat, height=max(320, len(cat_data) * 46))
+        fig.update_layout(margin=dict(l=0, r=140, t=24, b=0))
+        st.plotly_chart(fig, use_container_width=True)
 
         c1, c2 = st.columns(2)
         with c1:
