@@ -9,7 +9,7 @@ from plotnine import (
     scale_fill_manual, scale_color_manual, scale_fill_gradient, guides,
     position_dodge, labs,
 )
-from ninejs import interactive, to_html, css as nj_css
+from ninejs import interactive, to_html, css as nj_css, javascript as nj_js
 
 st.set_page_config(
     page_title="Naveen's Finance",
@@ -297,6 +297,36 @@ _NJ_CSS = """
     box-shadow: 0 4px 18px rgba(0,0,0,0.22);
     pointer-events: none;
 }
+svg {
+    width: 100% !important;
+    height: auto !important;
+    display: block;
+    max-width: 100%;
+}
+"""
+
+_NJ_JS = """
+(function() {
+    function fixSvg() {
+        document.querySelectorAll('svg').forEach(function(s) {
+            var w = parseFloat(s.getAttribute('width'));
+            var h = parseFloat(s.getAttribute('height'));
+            if (w && h && !s.getAttribute('viewBox')) {
+                s.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+            }
+            s.removeAttribute('width');
+            s.removeAttribute('height');
+            s.style.width = '100%';
+            s.style.height = 'auto';
+        });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', fixSvg);
+    } else {
+        fixSvg();
+    }
+    setTimeout(fixSvg, 200);
+})();
 """
 
 def _ft():
@@ -317,7 +347,7 @@ def _ft():
     )
 
 def _nj(gg, height=360):
-    html = interactive(gg) + nj_css(_NJ_CSS) + to_html()
+    html = interactive(gg) + nj_css(_NJ_CSS) + nj_js(_NJ_JS) + to_html()
     components.html(html, height=height, scrolling=False)
 
 
